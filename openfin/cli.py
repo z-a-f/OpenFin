@@ -4,6 +4,7 @@ import sys
 
 import typer
 
+from openfin.agent_commands import agents_app
 from openfin.agent_run import run_agent_from_cli
 from openfin.compact import compact
 from openfin.context import context
@@ -88,3 +89,4 @@ app.command()(triage)
 app.command()(compact)
 app.add_typer(schedule_app, name="schedule")
 app.add_typer(index_app, name="index")
+app.add_typer(agents_app, name="agents")

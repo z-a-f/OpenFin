@@ -9,7 +9,7 @@ import typer
 from openfin.agent_run import parse_run_args, run_agent_session
 from openfin.agent_store import AgentEvent, AgentSessionStore, Project, utc_now
 from openfin.cli import main_entry
-from tests.helpers import openfin_home
+from tests.helpers import log_text, openfin_home
 
 
 class FakeAdapter:
@@ -119,6 +119,7 @@ def test_run_agent_session_logs_transcript_and_repl_turns(tmp_path: Path) -> Non
     ]
     assert loaded.native_session_id == "native-1"
     assert loaded.status == "exited"
+    assert f"#agent {meta.id} claude ended" in log_text(tmp_path)
     assert any("status: idle" in output for output in outputs)
     assert any("answer: first turn" in output for output in outputs)
 

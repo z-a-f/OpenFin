@@ -175,6 +175,7 @@ def run_agent_session(
         current_resume_id = run_turn(user_input, current_resume_id)
 
     meta = store.update_meta(meta.id, status="exited")
+    write_agent_memory_log(store, meta)
     return meta
 
 
@@ -194,3 +195,11 @@ def render_agent_event(event: AgentEvent) -> str:
     if event.kind == "progress":
         return event.text
     return event.text
+
+
+def write_agent_memory_log(store: AgentSessionStore, meta: AgentSessionMeta) -> None:
+    openfin_store = OpenFinStore(store.root)
+    transcript_path = meta.transcript_path or str(store.transcript_path(meta.id))
+    openfin_store.append_log_entry(
+        f"#agent {meta.id} {meta.adapter} ended status {meta.status} transcript {transcript_path}"
+    )
