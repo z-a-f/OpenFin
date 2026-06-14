@@ -10,6 +10,7 @@ OpenFin is managed with `uv`.
 uv sync
 uv run f --help
 uv run f init
+git -C "${OPENFIN_HOME:-$HOME/.openfin}" log --oneline
 ```
 
 OpenFin stores data in `~/.openfin` by default. Set `OPENFIN_HOME` to use a
@@ -22,10 +23,34 @@ export OPENFIN_HOME="$HOME/work/openfin-state"
 `FOUNDER_HOME` is not supported. `OPENFIN_HOME` is the only environment variable
 used for the OpenFin data directory.
 
+`f init` initializes a local Git repository in `OPENFIN_HOME` by default and
+creates the first commit for the base layout. OpenFin then auto-commits managed
+changes to tasks, inbox, logs, and agent transcripts as commands run.
+
+Opt out for one initialization run:
+
+```bash
+uv run f init --no-git
+```
+
+Disable Git automation for a process or shell:
+
+```bash
+export OPENFIN_GIT=0
+```
+
+Keep git initialization but disable automatic commits:
+
+```bash
+export OPENFIN_GIT_AUTO_COMMIT=0
+```
+
 ## Storage Files
 
 A freshly initialized store contains:
 
+- `.git/`: local history for the OpenFin home, unless Git automation is disabled.
+- `.gitignore`: ignores derived indexes and live sockets.
 - `charter.md`: durable project/company context.
 - `now.md`: current priorities and in-flight work.
 - `tasks.yaml`: structured tasks.

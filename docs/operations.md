@@ -20,11 +20,74 @@ export OPENFIN_HOME="$HOME/path/to/openfin-state"
 The OpenFin home is the backup boundary. If you copy it, you copy the user
 memory, tasks, logs, context profiles, search index, and agent transcripts.
 
+## Version-Controlled History
+
+`f init` creates a local Git repository in `OPENFIN_HOME` by default. OpenFin
+then commits managed text changes as commands run, so the project memory has a
+durable local history without requiring a separate workflow.
+
+Inspect the history:
+
+```bash
+git -C "${OPENFIN_HOME:-$HOME/.openfin}" log --oneline
+```
+
+Check for uncommitted local edits:
+
+```bash
+git -C "${OPENFIN_HOME:-$HOME/.openfin}" status
+```
+
+OpenFin stages only managed files:
+
+```text
+.gitignore
+charter.md
+now.md
+tasks.yaml
+inbox.md
+profiles.yaml
+log/
+agents/
+```
+
+The `.gitignore` keeps derived and live files out of history:
+
+```text
+.openfin/
+agents/openfind.sock
+```
+
+If `.gitignore` already exists, OpenFin preserves existing entries and appends
+the missing OpenFin rules.
+
+Skip Git for one initialization:
+
+```bash
+uv run f init --no-git
+```
+
+Disable Git automation entirely:
+
+```bash
+export OPENFIN_GIT=0
+```
+
+Keep the repository but stop automatic commits:
+
+```bash
+export OPENFIN_GIT_AUTO_COMMIT=0
+```
+
+Git automation is best-effort. If `git` is missing or a local Git command
+fails, OpenFin still writes the source file and continues.
+
 ## Backups
 
 Recommended backup set:
 
 ```text
+.git/
 charter.md
 now.md
 tasks.yaml

@@ -52,6 +52,34 @@ File helpers:
 - `write_text_atomic(path, text)`: temp-file write plus `os.replace`.
 - `dump_yaml(value)`: YAML with unicode preserved.
 
+## Versioning API
+
+Git automation lives in `openfin.versioning`.
+
+```python
+from openfin.versioning import auto_commit, ensure_git_repo
+
+store = OpenFinStore.from_env()
+store.ensure_layout()
+ensure_git_repo(store.root)
+auto_commit(store.root, "Update custom OpenFin extension data")
+```
+
+Useful helpers:
+
+- `ensure_git_repo(root)`: create or reuse a local Git repository, merge the
+  required `.gitignore` rules, and configure a local OpenFin identity if needed.
+- `auto_commit(root, message)`: stage OpenFin-managed paths and create a commit
+  when there are changes.
+- `git_enabled()`: respect `OPENFIN_GIT`.
+- `auto_commit_enabled()`: respect `OPENFIN_GIT` and
+  `OPENFIN_GIT_AUTO_COMMIT`.
+
+Both `ensure_git_repo()` and `auto_commit()` are best-effort and return `False`
+instead of raising when Git is unavailable or a Git command fails. Source-file
+writes should complete before calling `auto_commit()` so user data is not
+blocked by Git.
+
 ## Task API
 
 Task helpers live in `openfin.task`.

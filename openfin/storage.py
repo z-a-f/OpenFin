@@ -10,6 +10,8 @@ from typing import Any, Iterable
 
 import yaml
 
+from openfin.versioning import DEFAULT_GITIGNORE, auto_commit, ensure_git_repo
+
 
 ENCODING = "utf-8"
 TASK_STATUSES = {"open", "doing", "blocked", "done", "dropped"}
@@ -114,24 +116,40 @@ class OpenFinStore:
         return self.root / "profiles.yaml"
 
     @property
+    def gitignore_path(self) -> Path:
+        return self.root / ".gitignore"
+
+    @property
     def log_dir(self) -> Path:
         return self.root / "log"
 
-    def ensure_layout(self) -> None:
+    def ensure_layout(self, *, version_control: bool = True) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self._write_if_missing(self.charter_path, DEFAULT_CHARTER)
-        self._write_if_missing(self.now_path, default_now_text())
-        self._write_if_missing(self.tasks_path, "[]\n")
-        self._write_if_missing(self.inbox_path, "")
-        self._write_if_missing(
-            self.profiles_path,
-            dump_yaml(DEFAULT_PROFILES),
+        initialized = any(
+            [
+                self._write_if_missing(self.charter_path, DEFAULT_CHARTER),
+                self._write_if_missing(self.now_path, default_now_text()),
+                self._write_if_missing(self.tasks_path, "[]\n"),
+                self._write_if_missing(self.inbox_path, ""),
+                self._write_if_missing(
+                    self.profiles_path,
+                    dump_yaml(DEFAULT_PROFILES),
+                ),
+                self._write_if_missing(self.gitignore_path, DEFAULT_GITIGNORE),
+            ]
         )
+        had_git = (self.root / ".git").exists()
+        if version_control:
+            ensure_git_repo(self.root)
+            if initialized or not had_git:
+                auto_commit(self.root, "Initialize OpenFin store")
 
-    def _write_if_missing(self, path: Path, text: str) -> None:
-        if not path.exists():
-            write_text_atomic(path, text)
+    def _write_if_missing(self, path: Path, text: str) -> bool:
+        if path.exists():
+            return False
+        write_text_atomic(path, text)
+        return True
 
     def load_tasks(self) -> list[dict[str, Any]]:
         self.ensure_layout()
@@ -143,6 +161,7 @@ class OpenFinStore:
     def save_tasks(self, tasks: list[dict[str, Any]]) -> None:
         self.ensure_layout()
         write_text_atomic(self.tasks_path, dump_yaml(tasks))
+        auto_commit(self.root, "Update OpenFin tasks")
 
     def load_profiles(self) -> dict[str, dict[str, Any]]:
         self.ensure_layout()
@@ -164,11 +183,13 @@ class OpenFinStore:
         self.ensure_layout()
         when = when or datetime.now()
         append_text(self.inbox_path, f"- {when:%Y-%m-%d %H:%M} {text}\n")
+        auto_commit(self.root, "Capture OpenFin inbox item")
 
     def write_inbox_lines(self, lines: list[str]) -> None:
         self.ensure_layout()
         text = ("\n".join(lines) + "\n") if lines else ""
         write_text_atomic(self.inbox_path, text)
+        auto_commit(self.root, "Update OpenFin inbox")
 
     def current_log_path(self, when: datetime | None = None) -> Path:
         when = when or datetime.now()
@@ -188,6 +209,7 @@ class OpenFinStore:
                 prefix += "\n"
             prefix += f"{header}\n\n"
         append_text(path, f"{prefix}- {when:%H:%M} {body}\n")
+        auto_commit(self.root, "Append OpenFin log entry")
 
     def iter_text_files(self) -> Iterable[tuple[Path, str]]:
         self.ensure_layout()

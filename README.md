@@ -29,10 +29,16 @@ uv run f --help
 Set `OPENFIN_HOME` to choose the storage directory. If it is not set, OpenFin
 uses `~/.openfin`.
 
+OpenFin initializes a local Git repository in `OPENFIN_HOME` by default and
+commits managed text changes as you work, so the plain-text history is preserved.
+Use `uv run f init --no-git` for a one-time skip, or set `OPENFIN_GIT=0` to
+disable Git automation.
+
 ## Quick Start
 
 ```bash
 uv run f init
+git -C "${OPENFIN_HOME:-$HOME/.openfin}" log --oneline
 uv run f in "raw thing to remember"
 uv run f add "ship the context command" -p P1 -d tomorrow -t code
 uv run f assign t-0001 alex --note "handoff"
