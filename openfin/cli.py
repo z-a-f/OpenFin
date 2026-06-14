@@ -53,7 +53,7 @@ def main(
         "--run",
         help=(
             "Run an agent adapter through OpenFin and log the transcript; "
-            "supports `claude` with --model, --resume, --profile, and --for."
+            "supports `claude` and `codex` with --model, --resume, --profile, and --for."
         ),
         callback=_run_option_callback,
         is_eager=True,

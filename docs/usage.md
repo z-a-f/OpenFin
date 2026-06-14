@@ -267,6 +267,7 @@ Start an agent through OpenFin:
 
 ```bash
 uv run f --run claude --model sonnet "review the open tasks and pick the next one"
+uv run f --run codex --model gpt-5 "review the open tasks and pick the next one"
 ```
 
 Supported `--run` options:
@@ -275,6 +276,11 @@ Supported `--run` options:
 - `--resume <native-session-id>`: resume an adapter-native session.
 - `--profile <profile>`: choose the context-pack profile.
 - `--for <topic>`: include topic hits in the injected context pack.
+
+Supported adapters:
+
+- `claude`: runs Claude Code in headless stream-json mode.
+- `codex`: runs Codex non-interactively through `codex exec --json`.
 
 Inside the local OpenFin prompt:
 

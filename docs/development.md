@@ -56,6 +56,13 @@ are willing to make a real Claude CLI request:
 OPENFIN_RUN_CLAUDE_SMOKE=1 uv run pytest -q -m smoke tests/test_claude_adapter.py
 ```
 
+Run the opt-in Codex binary smoke test when changing the Codex adapter and you
+are willing to make a real Codex CLI request:
+
+```bash
+OPENFIN_RUN_CODEX_SMOKE=1 uv run pytest -q -m smoke tests/test_codex_adapter.py
+```
+
 Pre-commit hooks currently run whitespace checks, YAML checks, large-file
 checks, Ruff linting, and Ruff formatting.
 
@@ -91,6 +98,7 @@ openfin/
   agent_store.py      agent metadata and transcript store
   agent_adapter.py    adapter protocol
   claude_adapter.py   Claude stream-json adapter
+  codex_adapter.py    Codex exec JSON adapter
   agent_run.py        f --run loop
   agent_commands.py   f agents commands
   daemon.py           openfind socket daemon and client

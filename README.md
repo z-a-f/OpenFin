@@ -69,6 +69,7 @@ agent's native session id, and reachable through the local `openfind` daemon.
 
 ```bash
 uv run f --run claude --model sonnet "review the open tasks and pick the next one"
+uv run f --run codex --model gpt-5 "review the open tasks and pick the next one"
 uv run f agents list
 uv run f agents show agent-20260614-120000-abcd1234 --last 20
 ```

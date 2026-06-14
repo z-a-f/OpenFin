@@ -241,6 +241,11 @@ To add an adapter:
 5. Add CLI/run-loop tests for safe options.
 6. Document tool-specific caveats.
 
+Built-in adapters:
+
+- `ClaudeAdapter`: `claude -p --verbose --output-format stream-json`.
+- `CodexAdapter`: `codex exec --json` and `codex exec resume --json`.
+
 ## Agent Run Loop API
 
 `openfin.agent_run.run_agent_session()` is the reusable local session runner.

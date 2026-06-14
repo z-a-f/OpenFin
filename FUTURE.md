@@ -32,9 +32,10 @@ stream-json mode per turn, and records normalized events for later context work.
   - Move process ownership into `openfind` so a session can survive closing the
     terminal that launched `f --run`, while still accepting local and Telegram
     input.
-- [ ] Codex adapter
-  - Add a first-class adapter for Codex once the invocation, streaming, resume,
-    and interrupt semantics are clear enough to normalize reliably.
+- [x] Codex adapter
+  - Implemented with `codex exec --json` and `codex exec resume --json`, safe
+    argv construction, context-pack prompt composition, normalized events,
+    native thread/session id capture, and an opt-in real-binary smoke test.
 - [ ] opencode adapter
   - Add an adapter for opencode with the same `AgentAdapter` contract and
     transcript/daemon behavior as Claude.

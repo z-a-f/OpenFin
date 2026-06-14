@@ -30,6 +30,7 @@ Core modules:
 - `openfin.agent_store`: agent session metadata and transcripts.
 - `openfin.agent_adapter`: agent adapter protocol.
 - `openfin.claude_adapter`: Claude headless stream-json adapter.
+- `openfin.codex_adapter`: Codex exec JSON adapter.
 - `openfin.agent_run`: `f --run` argument parsing and local agent turn loop.
 - `openfin.daemon`: Unix-socket daemon protocol and daemon client.
 - `openfin.telegram`: Telegram command and relay layer.
@@ -208,7 +209,7 @@ The canonical data remains the plain-text store, not SQLite.
 Agent support is split into five layers:
 
 1. `AgentAdapter`: protocol for a tool-specific driver.
-2. Adapter implementation: currently `ClaudeAdapter`.
+2. Adapter implementation: currently `ClaudeAdapter` and `CodexAdapter`.
 3. `AgentSessionStore`: durable metadata and transcript storage.
 4. `run_agent_session()`: local turn loop and transcript writer.
 5. `openfind`: daemon for cross-process routing and Telegram ownership.
@@ -233,11 +234,25 @@ and adapter-native `session_id` when available.
 The current Claude adapter is the v0 headless one-shot path:
 
 ```text
-claude -p --output-format stream-json [--resume ID] [--model MODEL] [--append-system-prompt CONTEXT] PROMPT
+claude -p --verbose --output-format stream-json [--resume ID] [--model MODEL] [--append-system-prompt CONTEXT] PROMPT
 ```
 
 It parses JSONL from stdout, maps each native message into `AgentEvent`, and
 captures the native `session_id` for future resume.
+
+### Codex Adapter
+
+The Codex adapter uses Codex's non-interactive JSONL path:
+
+```text
+codex exec --json --color never --skip-git-repo-check [--model MODEL] PROMPT
+codex exec resume --json --skip-git-repo-check [--model MODEL] SESSION_ID PROMPT
+```
+
+OpenFin prepends the selected context pack to the prompt because this Codex path
+does not expose a dedicated append-system-prompt option. The adapter parses JSONL
+events, maps messages/tool calls/results into `AgentEvent`, and captures native
+thread/session ids for future resume.
 
 ## Daemon Architecture
 

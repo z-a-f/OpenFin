@@ -23,7 +23,7 @@ OpenFin currently focuses on:
 
 - Plain-text project memory and task tracking.
 - AI-ready context packs assembled from local state.
-- A Claude headless adapter behind an agent adapter seam.
+- Claude and Codex adapters behind an agent adapter seam.
 - `openfind`, a local Unix-socket daemon that routes agent events and remote
   input.
 - Optional Telegram relay owned by the daemon.

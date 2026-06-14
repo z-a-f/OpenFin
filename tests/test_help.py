@@ -50,6 +50,14 @@ def test_all_cli_help_pages_render(tmp_path) -> None:
         assert "Show this message and exit" in result.output
 
 
+def test_main_help_mentions_supported_agent_adapters(tmp_path) -> None:
+    result = run_cli(tmp_path, ["--help"])
+
+    assert result.exit_code == 0
+    assert "claude" in result.output
+    assert "codex" in result.output
+
+
 def test_task_command_help_explains_core_arguments(tmp_path) -> None:
     add_help = run_cli(tmp_path, ["add", "--help"])
     edit_help = run_cli(tmp_path, ["edit", "--help"])

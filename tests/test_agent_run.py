@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import typer
 
-from openfin.agent_run import parse_run_args, run_agent_session
+from openfin.agent_run import create_adapter, parse_run_args, run_agent_session
 from openfin.agent_store import AgentEvent, AgentSessionStore, Project, utc_now
 from openfin.cli import main_entry
 from tests.helpers import log_text, openfin_home
@@ -108,9 +108,40 @@ def test_parse_run_args_accepts_safe_claude_flags() -> None:
     assert parsed.initial_prompt == "ship it"
 
 
+def test_parse_run_args_accepts_codex_adapter() -> None:
+    parsed = parse_run_args(
+        [
+            "codex",
+            "--model",
+            "gpt-5",
+            "--resume",
+            "thread-1",
+            "--profile",
+            "code",
+            "--for",
+            "agent routing",
+            "ship",
+            "it",
+        ]
+    )
+
+    assert parsed.adapter == "codex"
+    assert parsed.model == "gpt-5"
+    assert parsed.resume_id == "thread-1"
+    assert parsed.profile == "code"
+    assert parsed.topic == "agent routing"
+    assert parsed.initial_prompt == "ship it"
+
+
 def test_parse_run_args_rejects_unknown_flags() -> None:
     with pytest.raises(typer.BadParameter, match="unsupported --run option"):
         parse_run_args(["claude", "--dangerously-skip-permissions", "go"])
+
+
+def test_create_adapter_supports_codex() -> None:
+    adapter = create_adapter("codex")
+
+    assert adapter.name == "codex"
 
 
 def test_run_agent_session_logs_transcript_and_repl_turns(tmp_path: Path) -> None:
@@ -284,6 +315,6 @@ def test_console_entrypoint_run_option_forwards_extra_args(
 
     monkeypatch.setattr("openfin.cli.run_agent_from_cli", fake_run)
 
-    main_entry(["--run", "claude", "--model", "sonnet", "hello"])
+    main_entry(["--run", "codex", "--model", "gpt-5", "hello"])
 
-    assert calls == [["claude", "--model", "sonnet", "hello"]]
+    assert calls == [["codex", "--model", "gpt-5", "hello"]]

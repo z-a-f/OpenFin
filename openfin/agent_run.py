@@ -20,6 +20,7 @@ from openfin.agent_store import (
     discover_project,
 )
 from openfin.claude_adapter import ClaudeAdapter
+from openfin.codex_adapter import CodexAdapter
 from openfin.context import assemble_context_pack
 from openfin.daemon import connect_daemon
 from openfin.storage import OpenFinStore
@@ -90,7 +91,7 @@ def parse_run_args(args: list[str]) -> RunArgs:
     if not args:
         raise typer.BadParameter("--run requires an adapter name")
     adapter = args[0]
-    if adapter != "claude":
+    if adapter not in {"claude", "codex"}:
         raise typer.BadParameter(f"unsupported --run adapter: {adapter}")
 
     model: str | None = None
@@ -163,6 +164,8 @@ def run_agent_from_cli(args: list[str]) -> None:
 def create_adapter(name: str) -> AgentAdapter:
     if name == "claude":
         return ClaudeAdapter()
+    if name == "codex":
+        return CodexAdapter()
     raise typer.BadParameter(f"unsupported adapter: {name}")
 
 
