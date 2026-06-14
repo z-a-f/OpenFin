@@ -14,6 +14,31 @@ explicitly chosen. The intended shape is:
   - Base memory/task/search/digest commands remain local. Agent/API spend is behind the
     explicit `f --run claude ...` path; `f ask` and `f plan` are still deferred.
 
+## Phase 3 agent-layer deferrals
+
+Phase 3 shipped the first agent wrapper, transcript store, daemon routing, and
+Telegram control surface. The current implementation is intentionally the v0
+path: local `f --run claude ...` owns the process, uses Claude's headless
+stream-json mode per turn, and records normalized events for later context work.
+
+- [x] Claude headless stream-json adapter
+  - Implemented as the first `AgentAdapter`, with normalized events, native
+    session id capture, context injection, transcript writes, and daemon relay.
+- [ ] persistent Claude stream-json or SDK-backed warm session
+  - Keep the agent process/session warm across turns instead of paying the cold
+    start and context setup cost for each turn. This is the main latency upgrade
+    for the Phase 3 story.
+- [ ] daemon-owned detached agent sessions
+  - Move process ownership into `openfind` so a session can survive closing the
+    terminal that launched `f --run`, while still accepting local and Telegram
+    input.
+- [ ] Codex adapter
+  - Add a first-class adapter for Codex once the invocation, streaming, resume,
+    and interrupt semantics are clear enough to normalize reliably.
+- [ ] opencode adapter
+  - Add an adapter for opencode with the same `AgentAdapter` contract and
+    transcript/daemon behavior as Claude.
+
 ## Local AI housekeeping
 
 Phase 2 keeps dedup deterministic for reliability and speed. Later adapters can add
