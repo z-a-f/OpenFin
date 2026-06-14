@@ -6,6 +6,7 @@ from openfin.compact import compact
 from openfin.context import context
 from openfin.digest import digest
 from openfin.idea import capture, idea, triage
+from openfin.index import index_app
 from openfin.review import review
 from openfin.scheduler import schedule_app
 from openfin.search import search
@@ -46,3 +47,4 @@ app.command()(digest)
 app.command()(triage)
 app.command()(compact)
 app.add_typer(schedule_app, name="schedule")
+app.add_typer(index_app, name="index")
