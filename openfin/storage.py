@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -73,6 +74,14 @@ class TextHit:
     entry_date: date | None = None
 
 
+@dataclass(frozen=True)
+class LogEntry:
+    source: str
+    line_number: int
+    line: str
+    entry_date: date | None = None
+
+
 @dataclass
 class OpenFinStore:
     root: Path
@@ -116,12 +125,12 @@ class OpenFinStore:
         self._write_if_missing(self.inbox_path, "")
         self._write_if_missing(
             self.profiles_path,
-            yaml.safe_dump(DEFAULT_PROFILES, sort_keys=False),
+            dump_yaml(DEFAULT_PROFILES),
         )
 
     def _write_if_missing(self, path: Path, text: str) -> None:
         if not path.exists():
-            path.write_text(text)
+            write_text_atomic(path, text)
 
     def load_tasks(self) -> list[dict[str, Any]]:
         self.ensure_layout()
@@ -132,7 +141,7 @@ class OpenFinStore:
 
     def save_tasks(self, tasks: list[dict[str, Any]]) -> None:
         self.ensure_layout()
-        self.tasks_path.write_text(yaml.safe_dump(tasks, sort_keys=False))
+        write_text_atomic(self.tasks_path, dump_yaml(tasks))
 
     def load_profiles(self) -> dict[str, dict[str, Any]]:
         self.ensure_layout()
@@ -142,11 +151,12 @@ class OpenFinStore:
         return loaded
 
     def next_task_id(self, tasks: Iterable[dict[str, Any]]) -> str:
+        self.ensure_layout()
         highest = 0
         for task in tasks:
-            match = re.fullmatch(r"t-(\d{4,})", str(task.get("id", "")))
-            if match:
-                highest = max(highest, int(match.group(1)))
+            highest = max(highest, max_task_id(str(task.get("id", ""))))
+        for path in sorted(self.log_dir.glob("*.md")):
+            highest = max(highest, max_task_id(path.read_text()))
         return f"t-{highest + 1:04d}"
 
     def append_inbox(self, text: str, when: datetime | None = None) -> None:
@@ -154,6 +164,11 @@ class OpenFinStore:
         when = when or datetime.now()
         with self.inbox_path.open("a") as handle:
             handle.write(f"- {when:%Y-%m-%d %H:%M} {text}\n")
+
+    def write_inbox_lines(self, lines: list[str]) -> None:
+        self.ensure_layout()
+        text = ("\n".join(lines) + "\n") if lines else ""
+        write_text_atomic(self.inbox_path, text)
 
     def current_log_path(self, when: datetime | None = None) -> Path:
         when = when or datetime.now()
@@ -214,7 +229,7 @@ class OpenFinStore:
                     continue
                 if since and source.startswith("log/") and entry_date is None:
                     continue
-                if tag_marker and tag_marker not in line:
+                if tag_marker and not line_has_tag(line, tag_marker):
                     continue
                 if query_lower in line.lower():
                     hits.append(
@@ -232,49 +247,112 @@ class OpenFinStore:
             reverse=True,
         )
 
+    def log_entries(
+        self,
+        *,
+        tags: list[str] | str,
+        limit: int | None = None,
+        on_date: date | None = None,
+    ) -> list[LogEntry]:
+        self.ensure_layout()
+        want_all = tags == "all"
+        tag_markers = [] if want_all else [tag.lstrip("#") for tag in tags]
+        entries: list[LogEntry] = []
+
+        for path in sorted(self.log_dir.glob("*.md")):
+            current_day: date | None = None
+            for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+                if line.startswith("## "):
+                    current_day = parse_log_header_date(line)
+                    continue
+                if not line.startswith("- "):
+                    continue
+                if on_date and current_day != on_date:
+                    continue
+                if not want_all and not any(line_has_tag(line, marker) for marker in tag_markers):
+                    continue
+                entries.append(
+                    LogEntry(
+                        source=f"log/{path.name}",
+                        line_number=line_number,
+                        line=line,
+                        entry_date=current_day,
+                    )
+                )
+
+        entries.sort(
+            key=lambda entry: (entry.entry_date or date.min, entry.source, entry.line_number),
+            reverse=True,
+        )
+        return entries[:limit] if limit is not None else entries
+
     def recent_log_entries(
         self,
         *,
         tags: list[str] | str,
         limit: int,
     ) -> list[str]:
-        self.ensure_layout()
-        want_all = tags == "all"
-        tag_markers = [] if want_all else [f"#{tag.lstrip('#')}" for tag in tags]
-        entries: list[tuple[str, str]] = []
+        return [entry.line for entry in self.log_entries(tags=tags, limit=limit)]
 
-        for path in sorted(self.log_dir.glob("*.md")):
-            current_day = ""
-            for line in path.read_text().splitlines():
-                if line.startswith("## "):
-                    current_day = line.removeprefix("## ").strip()
-                    continue
-                if not line.startswith("- "):
-                    continue
-                if not want_all and not any(marker in line for marker in tag_markers):
-                    continue
-                entries.append((f"{current_day} {line}", line))
-
-        entries.sort(reverse=True)
-        return [entry for _, entry in entries[:limit]]
+    def has_log_marker(self, marker: str, task_id: str) -> bool:
+        needle = re.compile(rf"(?<![\w-])#{re.escape(marker)}\s+{re.escape(task_id)}(?![\w-])")
+        return any(needle.search(path.read_text()) for path in self.log_dir.glob("*.md"))
 
 
 def parse_log_header_date(line: str) -> date | None:
     match = re.fullmatch(r"##\s+(\d{4}-\d{2}-\d{2})", line.strip())
     if not match:
         return None
-    return date.fromisoformat(match.group(1))
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
 
 
 def parse_inbox_line_date(line: str) -> date | None:
     match = re.match(r"-\s+(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}\b", line)
     if not match:
         return None
-    return date.fromisoformat(match.group(1))
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
 
 
 def parse_now_updated(text: str) -> date | None:
     match = re.search(r"_updated:\s*(\d{4}-\d{2}-\d{2})_", text)
     if not match:
         return None
-    return date.fromisoformat(match.group(1))
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+def dump_yaml(value: Any) -> str:
+    return yaml.safe_dump(value, sort_keys=False, allow_unicode=True)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as handle:
+            temp_name = handle.name
+            handle.write(text)
+        os.replace(temp_name, path)
+    finally:
+        if temp_name and Path(temp_name).exists():
+            Path(temp_name).unlink()
+
+
+def max_task_id(text: str) -> int:
+    highest = 0
+    for match in re.finditer(r"\bt-(\d{4,})\b", text):
+        highest = max(highest, int(match.group(1)))
+    return highest
+
+
+def line_has_tag(line: str, tag: str) -> bool:
+    normalized = tag.lstrip("#")
+    return bool(re.search(rf"(?<![\w-])#{re.escape(normalized)}(?![\w-])", line))

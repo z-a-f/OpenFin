@@ -15,7 +15,6 @@ dependencies = [
 [project.scripts]
 f = "openfin.cli:app"
 openfin = "openfin.cli:app"
-sharkgpt = "openfin.cli:app"
 
 [dependency-groups]
 dev = [

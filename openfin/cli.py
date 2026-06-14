@@ -9,23 +9,27 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import dateparser
-import pyperclip
 import typer
 import yaml
-from rich.console import Console
-from rich.table import Table
 
 from openfin.storage import (
     ACTIVE_STATUSES,
     PRIORITIES,
     TASK_STATUSES,
     OpenFinStore,
+    dump_yaml,
     parse_now_updated,
 )
 
 app = typer.Typer(help="OpenFin founder helper CLI.")
-console = Console(color_system=None, highlight=False)
+
+
+class PlainConsole:
+    def print(self, *objects: Any, **_: Any) -> None:
+        typer.echo(" ".join(str(item) for item in objects))
+
+
+console = PlainConsole()
 
 PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 
@@ -61,6 +65,8 @@ def validate_status(status: str) -> str:
 def parse_date_input(value: str | None) -> str | None:
     if not value:
         return None
+    import dateparser
+
     parsed = dateparser.parse(
         value,
         settings={
@@ -77,7 +83,52 @@ def task_due_date(task: dict[str, Any], field: str = "due") -> date | None:
     value = task.get(field)
     if not value:
         return None
-    return date.fromisoformat(str(value))
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def invalid_task_dates(task: dict[str, Any]) -> list[str]:
+    invalid: list[str] = []
+    for field in ["due", "recheck", "created", "updated"]:
+        value = task.get(field)
+        if not value:
+            continue
+        try:
+            date.fromisoformat(str(value))
+        except ValueError:
+            invalid.append(f"{task.get('id')} {field}={value}")
+    return invalid
+
+
+def is_quiet_until_recheck(task: dict[str, Any], today: date) -> bool:
+    recheck = task_due_date(task, "recheck")
+    return recheck is not None and recheck > today
+
+
+def needs_review(task: dict[str, Any], today: date) -> bool:
+    recheck = task_due_date(task, "recheck")
+    if recheck is not None and recheck > today:
+        return False
+    due = task_due_date(task)
+    overdue = due is not None and due < today
+    recheck_due = recheck is not None and recheck <= today
+    return overdue or recheck_due
+
+
+def visible_overdue(task: dict[str, Any], today: date) -> bool:
+    if is_quiet_until_recheck(task, today):
+        return False
+    due = task_due_date(task)
+    return due is not None and due < today
+
+
+def visible_due_today(task: dict[str, Any], today: date) -> bool:
+    if is_quiet_until_recheck(task, today):
+        return False
+    due = task_due_date(task)
+    return due is not None and due == today
 
 
 def active_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -125,6 +176,10 @@ def render_tasks(tasks: list[dict[str, Any]], *, title: str) -> None:
         console.print(f"{title}: none")
         return
 
+    from rich.console import Console
+    from rich.table import Table
+
+    rich_console = Console(color_system=None, highlight=False)
     table = Table(title=title)
     table.add_column("ID")
     table.add_column("Priority")
@@ -142,7 +197,16 @@ def render_tasks(tasks: list[dict[str, Any]], *, title: str) -> None:
             tags,
             str(task.get("title", "")),
         )
-    console.print(table)
+    rich_console.print(table)
+
+
+def render_bad_dates(tasks: list[dict[str, Any]]) -> None:
+    messages = [message for task in tasks for message in invalid_task_dates(task)]
+    if not messages:
+        return
+    console.print("BAD DATES")
+    for message in messages:
+        console.print(f"- {message}")
 
 
 def format_task_line(task: dict[str, Any]) -> str:
@@ -359,12 +423,12 @@ def edit(
 def edit_task_in_editor(task: dict[str, Any]) -> dict[str, Any]:
     editor = os.environ.get("EDITOR")
     if not editor:
-        console.print(yaml.safe_dump(task, sort_keys=False), markup=False)
+        console.print(dump_yaml(task), markup=False)
         raise typer.Exit()
 
     with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False) as handle:
         path = Path(handle.name)
-        handle.write(yaml.safe_dump(task, sort_keys=False))
+        handle.write(dump_yaml(task))
     try:
         subprocess.run([*shlex.split(editor), str(path)], check=True)
         edited = yaml.safe_load(path.read_text())
@@ -386,9 +450,10 @@ def overdue() -> None:
     overdue_tasks = [
         task
         for task in active_tasks(tasks)
-        if (due := task_due_date(task)) is not None and due < today
+        if visible_overdue(task, today)
     ]
     render_tasks(sort_tasks(overdue_tasks), title="OVERDUE")
+    render_bad_dates(tasks)
 
 
 @app.command()
@@ -401,18 +466,14 @@ def today() -> None:
     overdue_tasks = [
         task
         for task in active
-        if (due := task_due_date(task)) is not None and due < today
+        if visible_overdue(task, today)
     ]
     due_today = [
         task
         for task in active
-        if (due := task_due_date(task)) is not None and due == today
+        if visible_due_today(task, today)
     ]
-    recheck_tasks = [
-        task
-        for task in active
-        if (recheck := task_due_date(task, "recheck")) is not None and recheck <= today
-    ]
+    review_tasks = [task for task in active if needs_review(task, today)]
     doing = [task for task in active if task.get("status") == "doing"]
     blocked = [task for task in active if task.get("status") == "blocked"]
     stale = find_stale_tasks(active, today)
@@ -421,7 +482,7 @@ def today() -> None:
     render_tasks(sort_tasks(due_today)[:3], title="TODAY")
     render_tasks(sort_tasks(doing), title="IN FLIGHT")
     render_tasks(sort_tasks(blocked), title="WAITING ON")
-    if overdue_tasks or recheck_tasks:
+    if review_tasks:
         console.print("Run `f review` to make a decision on overdue/recheck items.")
 
     stale_messages = list(stale)
@@ -432,6 +493,7 @@ def today() -> None:
         console.print("STALE")
         for message in stale_messages:
             console.print(f"- {message}")
+    render_bad_dates(tasks)
 
 
 def find_stale_tasks(tasks: list[dict[str, Any]], today: date) -> list[str]:
@@ -453,10 +515,7 @@ def review() -> None:
     review_items = [
         task
         for task in active_tasks(tasks)
-        if (
-            ((due := task_due_date(task)) is not None and due < today)
-            or ((recheck := task_due_date(task, "recheck")) is not None and recheck <= today)
-        )
+        if needs_review(task, today)
     ]
     if not review_items:
         console.print("No overdue or recheck items.")
@@ -518,6 +577,8 @@ def context(
     pack = assemble_context_pack(store, profile_name=profile, topic=topic)
     token_estimate = max(1, len(pack) // 4)
     if copy:
+        import pyperclip
+
         pyperclip.copy(pack)
         console.print("Copied context pack to clipboard.")
     else:
@@ -615,7 +676,7 @@ def digest(kind: str = typer.Argument("morning")) -> None:
     overdue_tasks = [
         task
         for task in active
-        if (due := task_due_date(task)) is not None and due < today
+        if visible_overdue(task, today)
     ]
 
     if normalized == "morning":
@@ -626,7 +687,7 @@ def digest(kind: str = typer.Argument("morning")) -> None:
                 [
                     task
                     for task in active
-                    if (due := task_due_date(task)) is not None and due == today
+                    if visible_due_today(task, today)
                 ]
             )[:3],
             title="TODAY'S TOP 3",
@@ -637,9 +698,8 @@ def digest(kind: str = typer.Argument("morning")) -> None:
 
     console.print("EVENING DIGEST")
     today_log = [
-        entry
-        for entry in store.recent_log_entries(tags="all", limit=100)
-        if "#done" in entry
+        entry.line
+        for entry in store.log_entries(tags=["done"], on_date=today, limit=100)
     ]
     for entry in today_log[:10]:
         console.print(entry, markup=False)
@@ -702,7 +762,7 @@ def triage() -> None:
         else:
             remaining.append(line)
     store.save_tasks(tasks)
-    store.inbox_path.write_text(("\n".join(remaining) + "\n") if remaining else "")
+    store.write_inbox_lines(remaining)
     console.print("Triage complete.")
 
 
@@ -722,7 +782,9 @@ def compact() -> None:
         if task.get("status") in {"done", "dropped"} and updated and updated < archive_cutoff:
             archived.append(task)
             marker = "done" if task.get("status") == "done" else "dropped"
-            store.append_log_entry(f"#{marker} {task.get('id')} {task.get('title')}")
+            task_id = str(task.get("id"))
+            if not store.has_log_marker(marker, task_id):
+                store.append_log_entry(f"#{marker} {task_id} {task.get('title')}")
         else:
             kept.append(task)
 
@@ -742,7 +804,7 @@ def compact() -> None:
         for task in stale:
             console.print(format_task_line(task), markup=False)
 
-    redundant = find_tag_collisions(active_tasks(kept))
+    redundant = find_tag_collisions(kept, today=today)
     if redundant:
         console.print("POSSIBLE REDUNDANCY")
         for tag, tasks_for_tag in redundant.items():
@@ -750,9 +812,26 @@ def compact() -> None:
             console.print(f"#{tag}: {ids}")
 
 
-def find_tag_collisions(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def find_tag_collisions(
+    tasks: list[dict[str, Any]],
+    *,
+    today: date,
+) -> dict[str, list[dict[str, Any]]]:
     by_tag: dict[str, list[dict[str, Any]]] = {}
     for task in tasks:
+        if task.get("status") != "open":
+            continue
         for tag in task.get("tags") or []:
             by_tag.setdefault(str(tag), []).append(task)
-    return {tag: tagged for tag, tagged in by_tag.items() if len(tagged) >= 2}
+    return {
+        tag: tagged
+        for tag, tagged in by_tag.items()
+        if len(tagged) >= 2 and any(is_redundancy_candidate(task, today) for task in tagged)
+    }
+
+
+def is_redundancy_candidate(task: dict[str, Any], today: date) -> bool:
+    if visible_overdue(task, today):
+        return True
+    created = task_due_date(task, "created")
+    return created is not None and created < today - timedelta(days=7)
