@@ -7,10 +7,11 @@ import socketserver
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -82,12 +83,14 @@ class OpenFindDaemon:
         self._sessions: dict[str, DaemonSession] = {}
         self._inboxes: dict[str, deque[dict[str, str]]] = {}
         self._event_sinks: list[Callable[[DaemonSession, AgentEvent], None]] = []
+        self._lock = threading.RLock()
 
     def add_event_sink(
         self,
         sink: Callable[[DaemonSession, AgentEvent], None],
     ) -> None:
-        self._event_sinks.append(sink)
+        with self._lock:
+            self._event_sinks.append(sink)
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         request_type = str(request.get("type") or "")
@@ -98,10 +101,11 @@ class OpenFindDaemon:
         if request_type == "list_sessions":
             return {"ok": True, "sessions": self._session_summaries()}
         if request_type == "status":
-            session = self._lookup_session(str(request.get("session_id") or ""))
-            if session is None:
-                return self._error("unknown session")
-            return {"ok": True, "session": session.to_dict()}
+            with self._lock:
+                session = self._lookup_session(str(request.get("session_id") or ""))
+                if session is None:
+                    return self._error("unknown session")
+                return {"ok": True, "session": session.to_dict()}
         if request_type == "update_status":
             return self._update_status(request)
         if request_type == "session_event":
@@ -128,54 +132,68 @@ class OpenFindDaemon:
             meta,
             pid=int(pid) if isinstance(pid, int) else None,
         )
-        self._sessions[meta.id] = session
-        self._inboxes.setdefault(meta.id, deque())
+        with self._lock:
+            self._sessions[meta.id] = session
+            self._inboxes.setdefault(meta.id, deque())
         if not self.store.meta_path(meta.id).exists():
             self.store.create_session(meta)
         return {"ok": True, "session_id": meta.id}
 
     def _update_status(self, request: dict[str, Any]) -> dict[str, Any]:
-        session = self._lookup_session(str(request.get("session_id") or ""))
-        if session is None:
-            return self._error("unknown session")
         status = str(request.get("status") or "")
         if not status:
             return self._error("update_status requires a status")
-        session.status = status
-        self._save_meta_if_present(session.id, status=status)
+        with self._lock:
+            session = self._lookup_session(str(request.get("session_id") or ""))
+            if session is None:
+                return self._error("unknown session")
+            session.status = status
+            session_id = session.id
+        self._save_meta_if_present(session_id, status=status)
         return {"ok": True}
 
     def _record_event(self, request: dict[str, Any]) -> dict[str, Any]:
-        session = self._lookup_session(str(request.get("session_id") or ""))
-        if session is None:
-            return self._error("unknown session")
         raw_event = request.get("event")
         if not isinstance(raw_event, dict):
             return self._error("session_event requires an event object")
         event = AgentEvent.from_dict(raw_event)
-        session.last_event_kind = event.kind
-        session.last_event_text = event.text
-        if event.session_id:
-            session.native_session_id = event.session_id
-            self._save_meta_if_present(session.id, native_session_id=event.session_id)
-        for sink in list(self._event_sinks):
+        native_session_id = event.session_id or None
+        session_id = str(request.get("session_id") or "")
+        with self._lock:
+            session = self._lookup_session(session_id)
+            if session is None:
+                return self._error("unknown session")
+            session.last_event_kind = event.kind
+            session.last_event_text = event.text
+            if native_session_id:
+                session.native_session_id = native_session_id
+            sinks = list(self._event_sinks)
+            snapshot = replace(session)
+        if native_session_id:
+            self._save_meta_if_present(session_id, native_session_id=native_session_id)
+        for sink in sinks:
             try:
-                sink(session, event)
+                sink(snapshot, event)
             except Exception:
                 continue
         return {"ok": True}
 
     def _queue_message(self, request: dict[str, Any]) -> dict[str, Any]:
         session_id = str(request.get("session_id") or "")
-        if self._lookup_session(session_id) is None:
-            return self._error("unknown session")
         text = str(request.get("text") or "").strip()
         if not text:
             return self._error("send_input requires text")
         source = str(request.get("source") or "local")
-        inbox = self._inboxes.setdefault(session_id, deque())
-        inbox.append({"type": "message", "text": text, "source": source})
-        return {"ok": True, "queued": len(inbox)}
+        with self._lock:
+            session = self._lookup_session(session_id)
+            if session is None:
+                return self._error("unknown session")
+            if session.status == "exited":
+                return self._error("session is exited")
+            inbox = self._inboxes.setdefault(session_id, deque())
+            inbox.append({"type": "message", "text": text, "source": source})
+            queued = len(inbox)
+        return {"ok": True, "queued": queued}
 
     def _queue_control(
         self,
@@ -184,32 +202,38 @@ class OpenFindDaemon:
         item_type: str,
     ) -> dict[str, Any]:
         session_id = str(request.get("session_id") or "")
-        if self._lookup_session(session_id) is None:
-            return self._error("unknown session")
         source = str(request.get("source") or "local")
-        inbox = self._inboxes.setdefault(session_id, deque())
-        inbox.append({"type": item_type, "text": "", "source": source})
-        return {"ok": True, "queued": len(inbox)}
+        with self._lock:
+            session = self._lookup_session(session_id)
+            if session is None:
+                return self._error("unknown session")
+            if session.status == "exited":
+                return self._error("session is exited")
+            inbox = self._inboxes.setdefault(session_id, deque())
+            inbox.append({"type": item_type, "text": "", "source": source})
+            queued = len(inbox)
+        return {"ok": True, "queued": queued}
 
     def _poll_input(self, request: dict[str, Any]) -> dict[str, Any]:
         session_id = str(request.get("session_id") or "")
-        if self._lookup_session(session_id) is None:
-            return self._error("unknown session")
-        inbox = self._inboxes.setdefault(session_id, deque())
-        items = list(inbox)
-        inbox.clear()
+        with self._lock:
+            if self._lookup_session(session_id) is None:
+                return self._error("unknown session")
+            inbox = self._inboxes.setdefault(session_id, deque())
+            items = drain_deque(inbox)
         return {"ok": True, "items": items}
 
     def _unregister_session(self, request: dict[str, Any]) -> dict[str, Any]:
         session_id = str(request.get("session_id") or "")
-        session = self._lookup_session(session_id)
-        if session is None:
-            return self._error("unknown session")
         status = str(request.get("status") or "exited")
-        session.status = status
+        with self._lock:
+            session = self._lookup_session(session_id)
+            if session is None:
+                return self._error("unknown session")
+            session.status = status
+            self._sessions.pop(session_id, None)
+            self._inboxes.pop(session_id, None)
         self._save_meta_if_present(session_id, status=status)
-        self._sessions.pop(session_id, None)
-        self._inboxes.pop(session_id, None)
         return {"ok": True}
 
     def _session_summaries(self) -> list[dict[str, Any]]:
@@ -217,28 +241,30 @@ class OpenFindDaemon:
             meta.id: DaemonSession.from_meta(meta).to_dict()
             for meta in self.store.list_sessions()
         }
-        sessions.update(
-            {
-                session_id: session.to_dict()
-                for session_id, session in self._sessions.items()
-            }
-        )
+        with self._lock:
+            sessions.update(
+                {
+                    session_id: session.to_dict()
+                    for session_id, session in self._sessions.items()
+                }
+            )
         return [sessions[session_id] for session_id in sorted(sessions)]
 
     def _lookup_session(self, session_id: str) -> DaemonSession | None:
         if not session_id:
             return None
-        live = self._sessions.get(session_id)
-        if live is not None:
-            return live
-        try:
-            meta = self.store.load_meta(session_id)
-        except FileNotFoundError:
-            return None
-        session = DaemonSession.from_meta(meta)
-        self._sessions[session_id] = session
-        self._inboxes.setdefault(session_id, deque())
-        return session
+        with self._lock:
+            live = self._sessions.get(session_id)
+            if live is not None:
+                return live
+            try:
+                meta = self.store.load_meta(session_id)
+            except FileNotFoundError:
+                return None
+            session = DaemonSession.from_meta(meta)
+            self._sessions[session_id] = session
+            self._inboxes.setdefault(session_id, deque())
+            return session
 
     def _save_meta_if_present(self, session_id: str, **updates: Any) -> None:
         try:
@@ -248,6 +274,16 @@ class OpenFindDaemon:
 
     def _error(self, message: str) -> dict[str, Any]:
         return {"ok": False, "error": message}
+
+
+def drain_deque(inbox: deque[dict[str, str]]) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    while True:
+        try:
+            items.append(inbox.popleft())
+        except IndexError:
+            break
+    return items
 
 
 class DaemonClient:

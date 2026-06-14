@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter, deque
 import stat
 import threading
 import uuid
@@ -14,6 +15,7 @@ from openfin.daemon import (
     connect_daemon,
     create_daemon_server,
     daemon_app,
+    drain_deque,
     prepare_socket_path,
     send_daemon_request,
 )
@@ -106,6 +108,147 @@ def test_daemon_events_and_inbound_queue_are_round_trippable(tmp_path: Path) -> 
     assert status["session"]["native_session_id"] == "native-1"
     assert status["session"]["last_event_kind"] == "turn_done"
     assert status["session"]["last_event_text"] == "ready for next thing"
+
+
+def test_daemon_rejects_input_for_exited_session(tmp_path: Path) -> None:
+    store = AgentSessionStore(tmp_path / "openfin")
+    meta = store.create_session(
+        AgentSessionMeta.new(
+            session_id="agent-001",
+            adapter="claude",
+            project=Project(name="OpenFin", root=tmp_path),
+        )
+    )
+    daemon = OpenFindDaemon(store)
+    daemon.handle({"type": "register_session", "session": meta.to_dict()})
+    daemon.handle({"type": "unregister_session", "session_id": meta.id})
+
+    response = daemon.handle(
+        {
+            "type": "send_input",
+            "session_id": meta.id,
+            "text": "anyone home?",
+            "source": "telegram",
+        }
+    )
+
+    assert response == {"ok": False, "error": "session is exited"}
+
+
+def test_drain_deque_loses_nothing_under_concurrent_append() -> None:
+    inbox: deque[dict[str, str]] = deque()
+    collected: list[dict[str, str]] = []
+    done = threading.Event()
+    total = 20_000
+
+    def produce() -> None:
+        for index in range(total):
+            inbox.append({"type": "message", "text": str(index), "source": "test"})
+        done.set()
+
+    def consume() -> None:
+        while not done.is_set() or inbox:
+            collected.extend(drain_deque(inbox))
+
+    producer = threading.Thread(target=produce)
+    consumer = threading.Thread(target=consume)
+    producer.start()
+    consumer.start()
+    producer.join(timeout=5)
+    consumer.join(timeout=5)
+    collected.extend(drain_deque(inbox))
+
+    assert len(collected) == total
+    assert Counter(item["text"] for item in collected) == Counter(
+        str(index) for index in range(total)
+    )
+
+
+def test_daemon_input_queue_survives_concurrent_send_and_poll(tmp_path: Path) -> None:
+    store = AgentSessionStore(tmp_path / "openfin")
+    meta = store.create_session(
+        AgentSessionMeta.new(
+            session_id="agent-001",
+            adapter="claude",
+            project=Project(name="OpenFin", root=tmp_path),
+        )
+    )
+    daemon = OpenFindDaemon(store)
+    daemon.handle({"type": "register_session", "session": meta.to_dict()})
+    collected: list[dict[str, str]] = []
+    done = threading.Event()
+    total = 2_000
+
+    def produce() -> None:
+        for index in range(total):
+            response = daemon.handle(
+                {
+                    "type": "send_input",
+                    "session_id": meta.id,
+                    "text": str(index),
+                    "source": "telegram",
+                }
+            )
+            assert response.get("ok") is True
+        done.set()
+
+    def consume() -> None:
+        while not done.is_set():
+            response = daemon.handle({"type": "poll_input", "session_id": meta.id})
+            assert response.get("ok") is True
+            collected.extend(response["items"])
+        response = daemon.handle({"type": "poll_input", "session_id": meta.id})
+        collected.extend(response["items"])
+
+    producer = threading.Thread(target=produce)
+    consumer = threading.Thread(target=consume)
+    producer.start()
+    consumer.start()
+    producer.join(timeout=5)
+    consumer.join(timeout=5)
+
+    assert len(collected) == total
+    assert Counter(item["text"] for item in collected) == Counter(
+        str(index) for index in range(total)
+    )
+
+
+def test_daemon_summaries_survive_concurrent_session_mutation(tmp_path: Path) -> None:
+    store = AgentSessionStore(tmp_path / "openfin")
+    daemon = OpenFindDaemon(store)
+    errors: list[BaseException] = []
+    done = threading.Event()
+
+    def mutate() -> None:
+        try:
+            for index in range(200):
+                meta = AgentSessionMeta.new(
+                    session_id=f"agent-{index:03d}",
+                    adapter="claude",
+                    project=Project(name="OpenFin", root=tmp_path),
+                )
+                daemon.handle({"type": "register_session", "session": meta.to_dict()})
+                daemon.handle({"type": "unregister_session", "session_id": meta.id})
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    def summarize() -> None:
+        try:
+            while not done.is_set():
+                daemon.handle({"type": "list_sessions"})
+        except BaseException as exc:
+            errors.append(exc)
+
+    mutator = threading.Thread(target=mutate)
+    summarizer = threading.Thread(target=summarize)
+    mutator.start()
+    summarizer.start()
+    mutator.join(timeout=5)
+    summarizer.join(timeout=5)
+
+    assert errors == []
 
 
 def test_daemon_unix_socket_request_response(tmp_path: Path) -> None:

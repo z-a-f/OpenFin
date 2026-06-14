@@ -309,7 +309,10 @@ class TelegramBotRunner:
                 update_id = update.get("update_id")
                 if isinstance(update_id, int):
                     offset = update_id + 1
-                self.bot.handle_update(update)
+                try:
+                    self.bot.handle_update(update)
+                except Exception:
+                    continue
 
 
 def chunk_text(text: str, *, limit: int = TELEGRAM_CHUNK_LIMIT) -> list[str]:

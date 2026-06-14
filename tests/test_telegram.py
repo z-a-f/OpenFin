@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from openfin.agent_store import AgentEvent, AgentSessionMeta, AgentSessionStore, Project
@@ -7,6 +8,7 @@ from openfin.daemon import OpenFindDaemon
 from openfin.telegram import (
     TelegramBot,
     TelegramConfig,
+    TelegramBotRunner,
     TelegramRateLimitError,
     chunk_text,
 )
@@ -261,3 +263,49 @@ def test_telegram_send_retries_after_rate_limit(tmp_path: Path) -> None:
     assert client.sent == [
         ("42", "OpenFin agent sessions:\n- agent-001 claude idle OpenFin")
     ]
+
+
+def test_telegram_runner_survives_bad_send(tmp_path: Path) -> None:
+    class BadSendPollingClient:
+        def __init__(self) -> None:
+            self.update_calls = 0
+
+        def get_updates(
+            self,
+            *,
+            offset: int | None = None,
+            timeout: int = 30,
+        ) -> list[dict]:
+            del offset, timeout
+            self.update_calls += 1
+            if self.update_calls == 1:
+                return [make_update("/sessions")]
+            time.sleep(0.01)
+            return []
+
+        def send_message(self, chat_id: str, text: str) -> None:
+            del chat_id, text
+            raise RuntimeError("telegram send failed")
+
+    daemon, _meta = make_daemon(tmp_path)
+    client = BadSendPollingClient()
+    bot = TelegramBot(
+        daemon=daemon,
+        client=client,
+        config=TelegramConfig(
+            token="token",
+            allowed_user_id="42",
+            chat_id="42",
+        ),
+    )
+    runner = TelegramBotRunner(bot, client)
+
+    runner.start()
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and client.update_calls < 2:
+        time.sleep(0.01)
+    still_running = runner._thread is not None and runner._thread.is_alive()
+    runner.stop()
+
+    assert client.update_calls >= 2
+    assert still_running

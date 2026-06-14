@@ -5,4 +5,5 @@ markers = [
   "slow: slower tests (excluded from fast CI)",
   "long: long-running tests (excluded from fast CI)",
   "longrunning: very long-running tests (excluded from fast CI)",
+  "smoke: opt-in tests that exercise installed external binaries or services",
 ]

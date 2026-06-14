@@ -49,6 +49,13 @@ Run lint:
 uv run ruff check .
 ```
 
+Run the opt-in Claude binary smoke test when changing the Claude adapter and you
+are willing to make a real Claude CLI request:
+
+```bash
+OPENFIN_RUN_CLAUDE_SMOKE=1 uv run pytest -q -m smoke tests/test_claude_adapter.py
+```
+
 Pre-commit hooks currently run whitespace checks, YAML checks, large-file
 checks, Ruff linting, and Ruff formatting.
 
