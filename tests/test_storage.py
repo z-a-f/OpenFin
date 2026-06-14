@@ -1,8 +1,39 @@
 from __future__ import annotations
 
 from pathlib import Path
-from openfin.storage import read_text
+
+from openfin.storage import OpenFinStore, read_text
 from tests.helpers import openfin_home, run_cli
+
+
+def test_store_defaults_to_dot_openfin_home(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("OPENFIN_HOME", raising=False)
+    monkeypatch.delenv("FOUNDER_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    store = OpenFinStore.from_env()
+
+    assert store.root == tmp_path / ".openfin"
+
+
+def test_store_uses_only_openfin_home_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENFIN_HOME", str(tmp_path / "configured"))
+    monkeypatch.setenv("FOUNDER_HOME", str(tmp_path / "founder"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    store = OpenFinStore.from_env()
+
+    assert store.root == tmp_path / "configured"
+
+
+def test_store_ignores_founder_home_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("OPENFIN_HOME", raising=False)
+    monkeypatch.setenv("FOUNDER_HOME", str(tmp_path / "founder"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    store = OpenFinStore.from_env()
+
+    assert store.root == tmp_path / ".openfin"
 
 
 def test_task_yaml_preserves_unicode_for_human_readability(tmp_path: Path) -> None:

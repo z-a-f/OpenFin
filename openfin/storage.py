@@ -89,8 +89,8 @@ class OpenFinStore:
 
     @classmethod
     def from_env(cls) -> "OpenFinStore":
-        configured = os.environ.get("OPENFIN_HOME") or os.environ.get("FOUNDER_HOME")
-        root = Path(configured).expanduser() if configured else Path.home() / "openfin"
+        configured = os.environ.get("OPENFIN_HOME")
+        root = Path(configured).expanduser() if configured else Path.home() / ".openfin"
         return cls(root=root)
 
     @property

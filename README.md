@@ -12,9 +12,8 @@ uv run pytest
 uv run f --help
 ```
 
-Set `OPENFIN_HOME` to choose the storage directory. `FOUNDER_HOME` is still
-accepted as a compatibility fallback. If neither is set, OpenFin uses
-`~/openfin`.
+Set `OPENFIN_HOME` to choose the storage directory. If it is not set, OpenFin
+uses `~/.openfin`.
 
 ## First Run
 
