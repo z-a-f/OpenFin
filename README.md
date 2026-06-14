@@ -1,7 +1,9 @@
-# SharkGPT
+# OpenFin
 
-SharkGPT is a local-first founder helper CLI for keeping project memory, tasks,
-captures, and AI context packs in plain text.
+OpenFin is a local-first founder helper CLI for keeping project memory, tasks,
+captures, and AI context packs in plain text. The name nods to OpenClaw while
+keeping a little Shark DNA: `sharkgpt` remains available as a legacy alias, but
+`openfin` and `f` are the primary commands.
 
 Phase 1 follows `founder-cli-spec.md`: Markdown and YAML are canonical,
 commands parse files on each run, and the base CLI makes no API calls.
@@ -14,8 +16,9 @@ uv run pytest
 uv run f --help
 ```
 
-Set `FOUNDER_HOME` to choose the storage directory. If unset, SharkGPT uses
-`~/founder`.
+Set `OPENFIN_HOME` to choose the storage directory. `FOUNDER_HOME` is still
+accepted as a compatibility fallback. If neither is set, OpenFin uses
+`~/openfin`.
 
 ## First Run
 

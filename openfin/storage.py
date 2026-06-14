@@ -35,7 +35,7 @@ DEFAULT_PROFILES: dict[str, dict[str, Any]] = {
     },
 }
 
-DEFAULT_CHARTER = """# SharkGPT Charter
+DEFAULT_CHARTER = """# OpenFin Charter
 ## Mission
 Write the mission here.
 ## Cofounders
@@ -74,13 +74,13 @@ class TextHit:
 
 
 @dataclass
-class FounderStore:
+class OpenFinStore:
     root: Path
 
     @classmethod
-    def from_env(cls) -> "FounderStore":
-        configured = os.environ.get("FOUNDER_HOME")
-        root = Path(configured).expanduser() if configured else Path.home() / "founder"
+    def from_env(cls) -> "OpenFinStore":
+        configured = os.environ.get("OPENFIN_HOME") or os.environ.get("FOUNDER_HOME")
+        root = Path(configured).expanduser() if configured else Path.home() / "openfin"
         return cls(root=root)
 
     @property

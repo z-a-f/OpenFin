@@ -16,22 +16,22 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from sharkgpt.storage import (
+from openfin.storage import (
     ACTIVE_STATUSES,
     PRIORITIES,
     TASK_STATUSES,
-    FounderStore,
+    OpenFinStore,
     parse_now_updated,
 )
 
-app = typer.Typer(help="SharkGPT founder helper CLI.")
+app = typer.Typer(help="OpenFin founder helper CLI.")
 console = Console(color_system=None, highlight=False)
 
 PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 
 
-def get_store() -> FounderStore:
-    return FounderStore.from_env()
+def get_store() -> OpenFinStore:
+    return OpenFinStore.from_env()
 
 
 def today_date() -> date:
@@ -155,17 +155,17 @@ def format_task_line(task: dict[str, Any]) -> str:
     )
 
 
-def append_task_log(store: FounderStore, marker: str, task: dict[str, Any], suffix: str = "") -> None:
+def append_task_log(store: OpenFinStore, marker: str, task: dict[str, Any], suffix: str = "") -> None:
     detail = f" {suffix}" if suffix else ""
     store.append_log_entry(f"#{marker} {task.get('id')} {task.get('title')}{detail}")
 
 
 @app.command()
 def init() -> None:
-    """Create the local SharkGPT plain-text store."""
+    """Create the local OpenFin plain-text store."""
     store = get_store()
     store.ensure_layout()
-    console.print(f"SharkGPT ready at {store.root}")
+    console.print(f"OpenFin ready at {store.root}")
 
 
 @app.command("in")
@@ -528,7 +528,7 @@ def context(
 
 
 def assemble_context_pack(
-    store: FounderStore,
+    store: OpenFinStore,
     *,
     profile_name: str,
     topic: str | None,
@@ -554,7 +554,7 @@ def assemble_context_pack(
     log_entries = store.recent_log_entries(tags=log_tags, limit=max_log_lines)
 
     parts = [
-        "# SharkGPT Context Pack",
+        "# OpenFin Context Pack",
         f"Profile: {profile_name}",
         "",
         "## Charter",

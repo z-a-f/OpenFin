@@ -6,19 +6,19 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
-from sharkgpt.cli import app
+from openfin.cli import app
 
 
 runner = CliRunner()
 
 
 def run_cli(tmp_path: Path, args: list[str]):
-    home = tmp_path / "founder"
-    return runner.invoke(app, args, env={"FOUNDER_HOME": str(home)})
+    home = tmp_path / "openfin"
+    return runner.invoke(app, args, env={"OPENFIN_HOME": str(home)})
 
 
 def founder_home(tmp_path: Path) -> Path:
-    return tmp_path / "founder"
+    return tmp_path / "openfin"
 
 
 def test_task_lifecycle_and_today_view(tmp_path: Path) -> None:
@@ -79,7 +79,7 @@ def test_context_profile_filters_sections_tasks_and_topic_hits(tmp_path: Path) -
 
     home = founder_home(tmp_path)
     (home / "charter.md").write_text(
-        "# SharkGPT Charter\n"
+        "# OpenFin Charter\n"
         "## Mission\n"
         "Keep founder context current.\n"
         "## Stack\n"

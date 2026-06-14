@@ -3,7 +3,7 @@
 A single-player, local-first CLI that keeps your project state in one searchable place,
 so you stop losing ideas in AI threads and stop re-priming AI from scratch.
 
-Command alias: **`f`**. Package: `founder` (rename as you like).
+Project: **OpenFin**. Command alias: **`f`**. Package: `openfin`.
 
 ---
 
@@ -31,10 +31,11 @@ Build priority: capture → search → context pack → tasks/overdue loop → c
 
 ## 2. Storage layout
 
-`FOUNDER_HOME` env var → a git repo (default `~/founder`).
+`OPENFIN_HOME` env var → a git repo (default `~/openfin`).
+`FOUNDER_HOME` remains a compatibility fallback.
 
 ```
-founder/
+openfin/
   charter.md          # L0 — identity, rarely changes; core of the context pack
   now.md              # L1 — current week: priorities, in-flight, blocked
   tasks.yaml          # structured tasks (canonical)
