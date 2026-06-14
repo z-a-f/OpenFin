@@ -80,6 +80,13 @@ class OpenFindDaemon:
         self.store = store
         self._sessions: dict[str, DaemonSession] = {}
         self._inboxes: dict[str, deque[dict[str, str]]] = {}
+        self._event_sinks: list[Callable[[DaemonSession, AgentEvent], None]] = []
+
+    def add_event_sink(
+        self,
+        sink: Callable[[DaemonSession, AgentEvent], None],
+    ) -> None:
+        self._event_sinks.append(sink)
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         request_type = str(request.get("type") or "")
@@ -150,6 +157,11 @@ class OpenFindDaemon:
         if event.session_id:
             session.native_session_id = event.session_id
             self._save_meta_if_present(session.id, native_session_id=event.session_id)
+        for sink in list(self._event_sinks):
+            try:
+                sink(session, event)
+            except Exception:
+                continue
         return {"ok": True}
 
     def _queue_message(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -513,6 +525,28 @@ def _encode_response(response: dict[str, Any]) -> bytes:
 def serve_daemon(socket_path: Path | None = None) -> None:
     store = AgentSessionStore(OpenFinStore.from_env().root)
     daemon = OpenFindDaemon(store)
+    telegram_runner = None
+    try:
+        from openfin.telegram import (
+            TelegramApiClient,
+            TelegramBot,
+            TelegramBotRunner,
+            TelegramConfig,
+        )
+
+        telegram_config = TelegramConfig.from_env()
+        if telegram_config is not None:
+            telegram_client = TelegramApiClient(telegram_config.token)
+            telegram_bot = TelegramBot(
+                daemon=daemon,
+                client=telegram_client,
+                config=telegram_config,
+            )
+            daemon.add_event_sink(telegram_bot.relay_agent_event)
+            telegram_runner = TelegramBotRunner(telegram_bot, telegram_client)
+            telegram_runner.start()
+    except Exception as exc:
+        console.print(f"telegram disabled: {exc}", markup=False)
     server = create_daemon_server(daemon, socket_path)
     listening_path = socket_path or store.socket_path
     console.print(f"openfind listening on {listening_path}", markup=False)
@@ -521,6 +555,8 @@ def serve_daemon(socket_path: Path | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if telegram_runner is not None:
+            telegram_runner.stop()
         server.server_close()
 
 
