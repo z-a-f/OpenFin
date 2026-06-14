@@ -25,7 +25,9 @@ used for the OpenFin data directory.
 
 `f init` initializes a local Git repository in `OPENFIN_HOME` by default and
 creates the first commit for the base layout. OpenFin then auto-commits managed
-changes to tasks, inbox, logs, and agent transcripts as commands run.
+changes to tasks, inbox, logs, and agent metadata as commands run. Agent
+transcripts remain local files, but are ignored by Git because they can contain
+sensitive context.
 
 Opt out for one initialization run:
 
@@ -63,7 +65,8 @@ Derived and agent files are also kept under the same root:
 - `.openfin/index.sqlite3`: rebuildable SQLite FTS search index.
 - `agents/openfind.sock`: daemon Unix socket.
 - `agents/<session-id>/meta.json`: agent session metadata.
-- `agents/<session-id>/transcript.jsonl`: normalized agent transcript.
+- `agents/<session-id>/transcript.jsonl`: normalized agent transcript, stored
+  locally and ignored by Git.
 
 ## Project Binding
 

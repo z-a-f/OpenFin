@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import stat
 import threading
+import uuid
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -121,6 +123,35 @@ def test_daemon_unix_socket_request_response(tmp_path: Path) -> None:
         thread.join(timeout=2)
 
     assert response == {"ok": True, "version": 1}
+
+
+def test_daemon_socket_is_private(tmp_path: Path) -> None:
+    store = AgentSessionStore(tmp_path / "openfin")
+    socket_path = store.socket_path
+    server = create_daemon_server(OpenFindDaemon(store), socket_path)
+
+    try:
+        parent_mode = stat.S_IMODE(socket_path.parent.stat().st_mode)
+        socket_mode = stat.S_IMODE(socket_path.stat().st_mode)
+    finally:
+        server.server_close()
+
+    assert parent_mode == 0o700
+    assert socket_mode == 0o600
+
+
+def test_daemon_rejects_socket_in_shared_tmp() -> None:
+    socket_path = Path("/tmp") / f"openfind-{uuid.uuid4().hex}.sock"
+
+    try:
+        prepare_socket_path(socket_path)
+    except Exception as exc:
+        assert "private directory" in str(exc)
+    else:
+        raise AssertionError("expected shared /tmp socket path to be rejected")
+    finally:
+        if socket_path.exists():
+            socket_path.unlink()
 
 
 def test_daemon_client_wraps_session_protocol(tmp_path: Path) -> None:

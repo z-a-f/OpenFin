@@ -144,7 +144,6 @@ class AgentSessionStore:
         self.save_meta(saved)
         if not self.transcript_path(meta.id).exists():
             write_text_atomic(self.transcript_path(meta.id), "")
-            auto_commit(self.root, f"Create OpenFin agent session {meta.id}")
         return saved
 
     def save_meta(self, meta: AgentSessionMeta) -> None:
@@ -169,7 +168,6 @@ class AgentSessionStore:
         line = event.to_json()
         text = f"{existing}{line}\n"
         write_text_atomic(path, text)
-        auto_commit(self.root, f"Append OpenFin agent transcript {session_id}")
 
     def load_transcript(self, session_id: str) -> list[AgentEvent]:
         path = self.transcript_path(session_id)

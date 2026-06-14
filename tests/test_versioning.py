@@ -8,7 +8,7 @@ import pytest
 
 from openfin.cli import app
 from openfin.agent_store import AgentEvent, AgentSessionMeta, AgentSessionStore, Project
-from openfin.versioning import ensure_git_repo
+from openfin.versioning import auto_commit, ensure_git_repo
 from tests.helpers import openfin_home, run_cli, runner
 
 
@@ -47,6 +47,7 @@ def test_gitignore_rules_are_merged_into_existing_file(tmp_path: Path) -> None:
     assert "custom.cache\n" in gitignore
     assert ".openfin/\n" in gitignore
     assert "agents/openfind.sock\n" in gitignore
+    assert "agents/*/transcript.jsonl\n" in gitignore
 
 
 def test_store_writes_create_followup_commits(tmp_path: Path) -> None:
@@ -100,7 +101,7 @@ def test_git_automation_can_be_disabled_with_env(tmp_path: Path) -> None:
     assert not (home / ".git").exists()
 
 
-def test_agent_session_transcripts_are_committed(tmp_path: Path) -> None:
+def test_agent_session_transcripts_are_ignored_by_git(tmp_path: Path) -> None:
     store = AgentSessionStore(openfin_home(tmp_path))
     meta = store.create_session(
         AgentSessionMeta.new(
@@ -121,6 +122,36 @@ def test_agent_session_transcripts_are_committed(tmp_path: Path) -> None:
     )
 
     log = git_output(openfin_home(tmp_path), "log", "--format=%s")
+    tracked = git_output(openfin_home(tmp_path), "ls-files")
 
-    assert "Append OpenFin agent transcript agent-001" in log
+    assert "Append OpenFin agent transcript agent-001" not in log
+    assert "agents/agent-001/meta.json" in tracked
+    assert "agents/agent-001/transcript.jsonl" not in tracked
     assert git_output(openfin_home(tmp_path), "status", "--porcelain") == ""
+
+
+def test_auto_commit_untracks_existing_transcripts(tmp_path: Path) -> None:
+    initialized = run_cli(tmp_path, ["init"])
+    home = openfin_home(tmp_path)
+    transcript = home / "agents" / "agent-001" / "transcript.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text('{"text": "secret"}\n', encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(home), "add", "-f", "agents/agent-001/transcript.jsonl"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(home), "commit", "-m", "Track old transcript"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert initialized.exit_code == 0, initialized.output
+    assert "agents/agent-001/transcript.jsonl" in git_output(home, "ls-files")
+
+    assert auto_commit(home, "Refresh OpenFin tracked files")
+
+    assert transcript.exists()
+    assert "agents/agent-001/transcript.jsonl" not in git_output(home, "ls-files")
+    assert git_output(home, "status", "--porcelain") == ""

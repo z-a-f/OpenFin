@@ -75,8 +75,10 @@ uv run f agents show agent-20260614-120000-abcd1234 --last 20
 
 `f --run claude ...` injects the current OpenFin context pack, stores normalized
 events under `OPENFIN_HOME/agents/<session>/transcript.jsonl`, and writes a
-`#agent` pointer into the normal log when the session exits. The `openfind`
-daemon is started automatically when possible; you can also run it directly:
+`#agent` pointer into the normal log when the session exits. Transcripts are
+kept locally for review and summarization, but ignored by Git because they may
+contain sensitive agent context. The `openfind` daemon is started automatically
+when possible; you can also run it directly:
 
 ```bash
 uv run openfind

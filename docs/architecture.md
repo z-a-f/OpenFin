@@ -85,7 +85,9 @@ Automatic commits are created after managed writes:
 - inbox appends and rewrites
 - monthly log appends
 - agent session metadata
-- agent transcript appends
+
+Agent transcripts are stored locally for review and later summarization, but are
+not tracked by Git.
 
 The auto-commit path stages only OpenFin-managed paths:
 
@@ -105,6 +107,7 @@ Derived and live files are ignored:
 ```text
 .openfin/
 agents/openfind.sock
+agents/*/transcript.jsonl
 ```
 
 Git automation is best-effort. If `git` is unavailable or a local git command

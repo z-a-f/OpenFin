@@ -194,6 +194,39 @@ def test_run_agent_session_registers_with_daemon_and_polls_remote_input(
     assert any("telegram> remote turn" in output for output in outputs)
 
 
+def test_remote_agent_input_remains_data_not_shell(tmp_path: Path) -> None:
+    adapter = FakeAdapter()
+    outputs: list[str] = []
+    payload = '$(touch /tmp/openfin-pwned); echo "still data"'
+    daemon = FakeDaemonClient(
+        [
+            [
+                {
+                    "type": "message",
+                    "text": payload,
+                    "source": "telegram",
+                }
+            ]
+        ]
+    )
+    inputs = iter(["/exit"])
+
+    run_agent_session(
+        adapter=adapter,
+        project=Project(name="OpenFin", root=tmp_path),
+        store=AgentSessionStore(openfin_home(tmp_path)),
+        initial_prompt=None,
+        model=None,
+        resume_id=None,
+        system_context=None,
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+        daemon_client=daemon,
+    )
+
+    assert adapter.prompts == [payload]
+
+
 def test_run_agent_session_polls_daemon_while_waiting_for_local_input(
     tmp_path: Path,
 ) -> None:

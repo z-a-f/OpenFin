@@ -4,7 +4,12 @@ from pathlib import Path
 
 from openfin.agent_store import AgentEvent, AgentSessionMeta, AgentSessionStore, Project
 from openfin.daemon import OpenFindDaemon
-from openfin.telegram import TelegramBot, TelegramConfig, chunk_text
+from openfin.telegram import (
+    TelegramBot,
+    TelegramConfig,
+    TelegramRateLimitError,
+    chunk_text,
+)
 
 
 class FakeTelegramClient:
@@ -23,6 +28,35 @@ def make_update(text: str, *, user_id: int = 42, chat_id: int = 42) -> dict:
             "text": text,
             "from": {"id": user_id},
             "chat": {"id": chat_id},
+        },
+    }
+
+
+def make_edited_update(text: str, *, user_id: int = 42, chat_id: int = 42) -> dict:
+    return {
+        "update_id": 2,
+        "edited_message": {
+            "message_id": 10,
+            "text": text,
+            "from": {"id": user_id},
+            "chat": {"id": chat_id},
+        },
+    }
+
+
+def make_callback_update(
+    data: str,
+    *,
+    user_id: int = 42,
+    chat_id: int = 42,
+) -> dict:
+    return {
+        "update_id": 3,
+        "callback_query": {
+            "id": "callback-1",
+            "data": data,
+            "from": {"id": user_id},
+            "message": {"chat": {"id": chat_id}},
         },
     }
 
@@ -115,6 +149,49 @@ def test_telegram_ignores_unapproved_users(tmp_path: Path) -> None:
     assert client.sent == []
 
 
+def test_telegram_auth_gate_covers_edited_messages_and_callbacks(
+    tmp_path: Path,
+) -> None:
+    daemon, _meta = make_daemon(tmp_path)
+    client = FakeTelegramClient()
+    bot = TelegramBot(
+        daemon=daemon,
+        client=client,
+        config=TelegramConfig(
+            token="token",
+            allowed_user_id="42",
+            chat_id="42",
+        ),
+    )
+
+    bot.handle_update(make_edited_update("/sessions", user_id=999))
+    bot.handle_update(make_callback_update("/sessions", user_id=999))
+
+    assert client.sent == []
+
+
+def test_telegram_authorized_edited_messages_use_same_command_path(
+    tmp_path: Path,
+) -> None:
+    daemon, _meta = make_daemon(tmp_path)
+    client = FakeTelegramClient()
+    bot = TelegramBot(
+        daemon=daemon,
+        client=client,
+        config=TelegramConfig(
+            token="token",
+            allowed_user_id="42",
+            chat_id="42",
+        ),
+    )
+
+    bot.handle_update(make_edited_update("/sessions"))
+
+    assert client.sent == [
+        ("42", "OpenFin agent sessions:\n- agent-001 claude idle OpenFin")
+    ]
+
+
 def test_telegram_relay_agent_events_from_daemon(tmp_path: Path) -> None:
     daemon, meta = make_daemon(tmp_path)
     client = FakeTelegramClient()
@@ -150,3 +227,37 @@ def test_telegram_chunks_long_messages() -> None:
     chunks = chunk_text("abcdef", limit=2)
 
     assert chunks == ["ab", "cd", "ef"]
+
+
+def test_telegram_send_retries_after_rate_limit(tmp_path: Path) -> None:
+    class RateLimitedClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.sent: list[tuple[str, str]] = []
+
+        def send_message(self, chat_id: str, text: str) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise TelegramRateLimitError(retry_after=3)
+            self.sent.append((chat_id, text))
+
+    daemon, _meta = make_daemon(tmp_path)
+    client = RateLimitedClient()
+    sleeps: list[float] = []
+    bot = TelegramBot(
+        daemon=daemon,
+        client=client,
+        config=TelegramConfig(
+            token="token",
+            allowed_user_id="42",
+            chat_id="42",
+        ),
+        sleep_func=sleeps.append,
+    )
+
+    bot.handle_update(make_update("/sessions"))
+
+    assert sleeps == [3]
+    assert client.sent == [
+        ("42", "OpenFin agent sessions:\n- agent-001 claude idle OpenFin")
+    ]

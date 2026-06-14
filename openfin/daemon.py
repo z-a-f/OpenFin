@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import socketserver
+import stat
 import subprocess
 import sys
 import time
@@ -434,6 +435,7 @@ class _DaemonUnixServer(socketserver.ThreadingUnixStreamServer):
         self.daemon = daemon
         self.socket_path = socket_path
         super().__init__(server_address, RequestHandlerClass)
+        socket_path.chmod(0o600)
 
     def server_close(self) -> None:
         super().server_close()
@@ -472,12 +474,34 @@ def create_daemon_server(
 
 
 def prepare_socket_path(socket_path: Path) -> None:
-    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_socket_dir(socket_path.parent)
     if not socket_path.exists():
         return
     if socket_path.is_socket() and socket_is_alive(socket_path):
         raise DaemonAlreadyRunning(f"openfind is already listening at {socket_path}")
     socket_path.unlink()
+
+
+def ensure_private_socket_dir(path: Path) -> None:
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path_stat = path.stat()
+    if path_stat.st_uid != os.getuid():
+        raise DaemonError(
+            f"openfind socket must live in a private directory owned by the current user: {path}"
+        )
+    mode = stat.S_IMODE(path_stat.st_mode)
+    if mode & stat.S_ISVTX or mode & 0o002:
+        raise DaemonError(f"openfind socket must live in a private directory: {path}")
+    if mode & 0o077:
+        try:
+            path.chmod(0o700)
+        except OSError as exc:
+            raise DaemonError(
+                f"openfind socket must live in a private directory: {path}"
+            ) from exc
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        raise DaemonError(f"openfind socket must live in a private directory: {path}")
 
 
 def socket_is_alive(socket_path: Path, *, timeout: float = 0.2) -> bool:

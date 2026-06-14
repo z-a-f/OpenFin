@@ -9,7 +9,11 @@ from pathlib import Path
 FALSE_VALUES = {"0", "false", "no", "off"}
 DEFAULT_GITIGNORE = """.openfin/
 agents/openfind.sock
+agents/*/transcript.jsonl
 """
+IGNORED_TRACKED_PATHS = [
+    ":(glob)agents/*/transcript.jsonl",
+]
 MANAGED_PATHS = [
     ".gitignore",
     "charter.md",
@@ -79,6 +83,8 @@ def auto_commit(root: Path, message: str) -> bool:
         if not pathspecs:
             return False
 
+        for pathspec in IGNORED_TRACKED_PATHS:
+            run_git(root, "rm", "--cached", "--ignore-unmatch", "--", pathspec)
         run_git(root, "add", "-A", "--", *pathspecs)
         status = run_git(
             root,

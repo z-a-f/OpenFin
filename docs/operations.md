@@ -56,6 +56,7 @@ The `.gitignore` keeps derived and live files out of history:
 ```text
 .openfin/
 agents/openfind.sock
+agents/*/transcript.jsonl
 ```
 
 If `.gitignore` already exists, OpenFin preserves existing entries and appends
@@ -98,6 +99,10 @@ agents/*/meta.json
 agents/*/transcript.jsonl
 ```
 
+Agent transcripts are intentionally part of backups but not Git history. They
+can contain source code, credentials accidentally exposed to an agent, or private
+reasoning/context from a long session.
+
 The following are derived or live files:
 
 ```text
@@ -135,8 +140,15 @@ uv run openfind
 Use a custom socket path for debugging:
 
 ```bash
-uv run openfind --socket /tmp/openfind.sock
+mkdir -p /tmp/openfind-debug
+chmod 700 /tmp/openfind-debug
+uv run openfind --socket /tmp/openfind-debug/openfind.sock
 ```
+
+The socket parent directory must be owned by the current user and private
+(`0700`). The socket itself is created as `0600`. OpenFin rejects direct shared
+paths such as `/tmp/openfind.sock` because the daemon socket is a control channel
+for local agent sessions.
 
 `f --run` calls `connect_daemon()` and attempts to autostart `openfind` when it
 cannot connect to the default socket.

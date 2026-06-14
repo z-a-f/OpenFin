@@ -18,6 +18,12 @@ TELEGRAM_CHUNK_LIMIT = 3900
 RELAY_EVENT_KINDS = {"assistant_text", "turn_done", "needs_input", "error"}
 
 
+class TelegramRateLimitError(RuntimeError):
+    def __init__(self, *, retry_after: float) -> None:
+        super().__init__(f"telegram rate limited; retry after {retry_after:g}s")
+        self.retry_after = retry_after
+
+
 class TelegramClient(Protocol):
     def send_message(self, chat_id: str, text: str) -> None: ...
 
@@ -65,7 +71,9 @@ class TelegramApiClient:
     ) -> list[dict[str, Any]]:
         data: dict[str, Any] = {
             "timeout": timeout,
-            "allowed_updates": json.dumps(["message"]),
+            "allowed_updates": json.dumps(
+                ["message", "edited_message", "callback_query"]
+            ),
         }
         if offset is not None:
             data["offset"] = offset
@@ -82,6 +90,12 @@ class TelegramApiClient:
         try:
             with urllib.request.urlopen(request, timeout=35) as response:
                 payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            payload = parse_telegram_error(exc)
+            retry_after = telegram_retry_after(payload)
+            if exc.code == 429 and retry_after is not None:
+                raise TelegramRateLimitError(retry_after=retry_after) from exc
+            raise RuntimeError("telegram request failed") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise RuntimeError(f"telegram request failed: {exc}") from exc
         if not isinstance(payload, dict) or payload.get("ok") is not True:
@@ -96,20 +110,23 @@ class TelegramBot:
         daemon: OpenFindDaemon,
         client: TelegramClient,
         config: TelegramConfig,
+        sleep_func: Any = time.sleep,
     ) -> None:
         self.daemon = daemon
         self.client = client
         self.config = config
+        self._sleep = sleep_func
 
     def handle_update(self, update: dict[str, Any]) -> None:
-        message = update.get("message")
-        if not isinstance(message, dict) or not self._is_authorized(message):
+        if not self._is_authorized_update(update):
+            return
+        message = self._message_from_update(update)
+        if not isinstance(message, dict):
             return
         text = str(message.get("text") or "").strip()
         if not text:
             return
-        chat = message.get("chat")
-        chat_id = str(chat.get("id")) if isinstance(chat, dict) else self.config.chat_id
+        chat_id = self._chat_id_from_update(update)
         response = self.handle_text(text)
         if response:
             self._send(chat_id, response)
@@ -221,15 +238,33 @@ class TelegramBot:
         matches = [session_id for session_id in ids if session_id.startswith(token)]
         return matches[0] if len(matches) == 1 else None
 
-    def _is_authorized(self, message: dict[str, Any]) -> bool:
-        sender = message.get("from")
-        if not isinstance(sender, dict):
-            return False
-        return str(sender.get("id") or "") == self.config.allowed_user_id
+    def _is_authorized_update(self, update: dict[str, Any]) -> bool:
+        return update_sender_id(update) == self.config.allowed_user_id
+
+    def _message_from_update(self, update: dict[str, Any]) -> dict[str, Any] | None:
+        for key in ("message", "edited_message"):
+            message = update.get(key)
+            if isinstance(message, dict):
+                return message
+        callback = update.get("callback_query")
+        if isinstance(callback, dict):
+            data = callback.get("data")
+            if isinstance(data, str):
+                return {"text": data}
+        return None
+
+    def _chat_id_from_update(self, update: dict[str, Any]) -> str:
+        chat_id = update_chat_id(update)
+        return chat_id or self.config.chat_id
 
     def _send(self, chat_id: str, text: str) -> None:
         for chunk in chunk_text(text):
-            self.client.send_message(chat_id, chunk)
+            while True:
+                try:
+                    self.client.send_message(chat_id, chunk)
+                    break
+                except TelegramRateLimitError as exc:
+                    self._sleep(exc.retry_after)
 
     def _help(self) -> str:
         return "\n".join(
@@ -281,3 +316,53 @@ def chunk_text(text: str, *, limit: int = TELEGRAM_CHUNK_LIMIT) -> list[str]:
     if not text:
         return [""]
     return [text[index : index + limit] for index in range(0, len(text), limit)]
+
+
+def update_sender_id(update: dict[str, Any]) -> str | None:
+    for key in ("message", "edited_message"):
+        message = update.get(key)
+        if isinstance(message, dict):
+            sender = message.get("from")
+            if isinstance(sender, dict):
+                return str(sender.get("id") or "")
+    callback = update.get("callback_query")
+    if isinstance(callback, dict):
+        sender = callback.get("from")
+        if isinstance(sender, dict):
+            return str(sender.get("id") or "")
+    return None
+
+
+def update_chat_id(update: dict[str, Any]) -> str | None:
+    for key in ("message", "edited_message"):
+        message = update.get(key)
+        if isinstance(message, dict):
+            chat = message.get("chat")
+            if isinstance(chat, dict):
+                return str(chat.get("id") or "")
+    callback = update.get("callback_query")
+    if isinstance(callback, dict):
+        message = callback.get("message")
+        if isinstance(message, dict):
+            chat = message.get("chat")
+            if isinstance(chat, dict):
+                return str(chat.get("id") or "")
+    return None
+
+
+def parse_telegram_error(exc: urllib.error.HTTPError) -> dict[str, Any]:
+    try:
+        payload = json.loads(exc.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def telegram_retry_after(payload: dict[str, Any]) -> float | None:
+    parameters = payload.get("parameters")
+    if not isinstance(parameters, dict):
+        return None
+    retry_after = parameters.get("retry_after")
+    if isinstance(retry_after, int | float):
+        return float(retry_after)
+    return None
