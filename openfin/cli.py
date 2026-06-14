@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import sys
+
 import typer
 
+from openfin.agent_run import run_agent_from_cli
 from openfin.compact import compact
 from openfin.context import context
 from openfin.digest import digest
@@ -26,7 +29,42 @@ from openfin.task import (
 )
 
 
-app = typer.Typer(help="OpenFin founder helper CLI.")
+app = typer.Typer(
+    help="OpenFin founder helper CLI.",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    invoke_without_command=True,
+    no_args_is_help=True,
+)
+
+
+def _run_option_callback(ctx: typer.Context, value: str | None) -> str | None:
+    if value is None or ctx.resilient_parsing:
+        return value
+    run_agent_from_cli([value, *ctx.args])
+    raise typer.Exit()
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    run: str | None = typer.Option(
+        None,
+        "--run",
+        help="Run an agent adapter through OpenFin, e.g. `f --run claude ...`.",
+        callback=_run_option_callback,
+        is_eager=True,
+    ),
+) -> None:
+    del ctx, run
+
+
+def main_entry(argv: list[str] | None = None) -> None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["--run"]:
+        run_agent_from_cli(args[1:])
+        return
+    app(args=args)
+
 
 app.command()(init)
 app.command("in")(capture)

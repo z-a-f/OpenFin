@@ -13,8 +13,8 @@ dependencies = [
 ]
 
 [project.scripts]
-f = "openfin.cli:app"
-openfin = "openfin.cli:app"
+f = "openfin.cli:main_entry"
+openfin = "openfin.cli:main_entry"
 
 [dependency-groups]
 dev = [
