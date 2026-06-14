@@ -24,6 +24,7 @@ accepted as a compatibility fallback. If neither is set, OpenFin uses
 uv run f init
 uv run f in "raw thing to remember"
 uv run f add "ship the context command" -p P1 -d tomorrow -t code
+uv run f touch t-0001 --note "made progress"
 uv run f idea "profiles are the cost-control lever" -t decision
 uv run f search "profiles"
 uv run f context code --for "profiles"

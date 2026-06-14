@@ -264,6 +264,21 @@ def drop(task_id: str) -> None:
     console.print(f"Dropped {task_id}: {task['title']}")
 
 
+def touch(task_id: str, note: str | None = typer.Option(None, "--note", "-n")) -> None:
+    """Record progress on a task without changing its status."""
+    store = OpenFinStore.from_env()
+    tasks = store.load_tasks()
+    task = find_task(tasks, task_id)
+    if note:
+        prior_notes = task.get("notes") or ""
+        addition = f"Progress {today_date().isoformat()}: {note}"
+        task["notes"] = f"{prior_notes}\n{addition}".strip()
+    update_task_timestamp(task)
+    store.save_tasks(tasks)
+    append_task_log(store, "touch", task, note or "")
+    console.print(f"Touched {task_id}: {task['title']}")
+
+
 def edit(
     task_id: str,
     title: str | None = typer.Option(None, "--title"),

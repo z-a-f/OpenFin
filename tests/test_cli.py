@@ -205,6 +205,92 @@ def test_review_commit_writes_recheck_and_quiets_next_run(tmp_path: Path) -> Non
     assert "Commit round trip" not in overdue.output
 
 
+def test_review_recheck_reports_no_progress_since_commit(tmp_path: Path) -> None:
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    created = run_cli(tmp_path, ["add", "Check committed task", "-d", yesterday])
+    assert created.exit_code == 0, created.output
+
+    committed = runner.invoke(
+        app,
+        ["review"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="commit\n0\n",
+    )
+    assert committed.exit_code == 0, committed.output
+
+    recheck = runner.invoke(
+        app,
+        ["review"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="skip\n",
+    )
+
+    assert recheck.exit_code == 0, recheck.output
+    assert "nothing moved since then" in recheck.output
+
+
+def test_touch_records_progress_for_recheck_loop(tmp_path: Path) -> None:
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    created = run_cli(tmp_path, ["add", "Touched commitment", "-d", yesterday])
+    assert created.exit_code == 0, created.output
+
+    committed = runner.invoke(
+        app,
+        ["review"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="commit\n0\n",
+    )
+    assert committed.exit_code == 0, committed.output
+
+    touched = run_cli(tmp_path, ["touch", "t-0001", "--note", "drafted the email"])
+    assert touched.exit_code == 0, touched.output
+
+    recheck = runner.invoke(
+        app,
+        ["review"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="skip\n",
+    )
+
+    tasks = load_tasks(tmp_path)
+    log_text = "\n".join(
+        read_text(path) for path in (openfin_home(tmp_path) / "log").glob("*.md")
+    )
+    assert "drafted the email" in tasks[0]["notes"]
+    assert "#touch t-0001 Touched commitment drafted the email" in log_text
+    assert "progress recorded since then" in recheck.output
+
+
+def test_status_advance_counts_as_recheck_progress(tmp_path: Path) -> None:
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    created = run_cli(tmp_path, ["add", "Advance commitment", "-d", yesterday])
+    assert created.exit_code == 0, created.output
+
+    committed = runner.invoke(
+        app,
+        ["review"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="commit\n0\n",
+    )
+    assert committed.exit_code == 0, committed.output
+
+    doing = run_cli(tmp_path, ["do", "t-0001"])
+    assert doing.exit_code == 0, doing.output
+
+    recheck = runner.invoke(
+        app,
+        ["review"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="skip\n",
+    )
+
+    assert recheck.exit_code == 0, recheck.output
+    assert "progress recorded since then" in recheck.output
+
+
 def test_archived_task_ids_are_not_reused_and_done_log_is_not_duplicated(
     tmp_path: Path,
 ) -> None:

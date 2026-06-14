@@ -20,6 +20,7 @@ from openfin.task import (
     overdue,
     start_task,
     today,
+    touch,
 )
 
 
@@ -35,6 +36,7 @@ app.command("do")(start_task)
 app.command()(done)
 app.command()(block)
 app.command()(drop)
+app.command()(touch)
 app.command()(edit)
 app.command()(overdue)
 app.command()(today)

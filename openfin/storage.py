@@ -215,7 +215,9 @@ class OpenFinStore:
 
         for path, source in self.iter_text_files():
             current_date: date | None = None
-            for line_number, raw_line in enumerate(read_text(path).splitlines(), start=1):
+            for line_number, raw_line in enumerate(
+                read_text(path).splitlines(), start=1
+            ):
                 line = raw_line.rstrip()
                 header_date = parse_log_header_date(line)
                 if header_date:
@@ -267,7 +269,9 @@ class OpenFinStore:
                     continue
                 if on_date and current_day != on_date:
                     continue
-                if not want_all and not any(line_has_tag(line, marker) for marker in tag_markers):
+                if not want_all and not any(
+                    line_has_tag(line, marker) for marker in tag_markers
+                ):
                     continue
                 entries.append(
                     LogEntry(
@@ -279,7 +283,11 @@ class OpenFinStore:
                 )
 
         entries.sort(
-            key=lambda entry: (entry.entry_date or date.min, entry.source, entry.line_number),
+            key=lambda entry: (
+                entry.entry_date or date.min,
+                entry.source,
+                entry.line_number,
+            ),
             reverse=True,
         )
         return entries[:limit] if limit is not None else entries
@@ -292,8 +300,22 @@ class OpenFinStore:
     ) -> list[str]:
         return [entry.line for entry in self.log_entries(tags=tags, limit=limit)]
 
+    def task_log_entries(
+        self,
+        task_id: str,
+        *,
+        tags: list[str] | str = "all",
+    ) -> list[LogEntry]:
+        return [
+            entry
+            for entry in self.log_entries(tags=tags, limit=None)
+            if line_references_task(entry.line, task_id)
+        ]
+
     def has_log_marker(self, marker: str, task_id: str) -> bool:
-        needle = re.compile(rf"(?<![\w-])#{re.escape(marker)}\s+{re.escape(task_id)}(?![\w-])")
+        needle = re.compile(
+            rf"(?<![\w-])#{re.escape(marker)}\s+{re.escape(task_id)}(?![\w-])"
+        )
         return any(needle.search(read_text(path)) for path in self.log_dir.glob("*.md"))
 
 
@@ -369,3 +391,7 @@ def max_task_id(text: str) -> int:
 def line_has_tag(line: str, tag: str) -> bool:
     normalized = tag.lstrip("#")
     return bool(re.search(rf"(?<![\w-])#{re.escape(normalized)}(?![\w-])", line))
+
+
+def line_references_task(line: str, task_id: str) -> bool:
+    return bool(re.search(rf"(?<![\w-]){re.escape(task_id)}(?![\w-])", line))
