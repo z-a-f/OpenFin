@@ -14,11 +14,13 @@ import yaml
 
 from openfin.storage import (
     ACTIVE_STATUSES,
+    ENCODING,
     PRIORITIES,
     TASK_STATUSES,
     OpenFinStore,
     dump_yaml,
     parse_now_updated,
+    read_text,
 )
 
 app = typer.Typer(help="OpenFin founder helper CLI.")
@@ -426,12 +428,17 @@ def edit_task_in_editor(task: dict[str, Any]) -> dict[str, Any]:
         console.print(dump_yaml(task), markup=False)
         raise typer.Exit()
 
-    with tempfile.NamedTemporaryFile("w+", suffix=".yaml", delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        "w+",
+        suffix=".yaml",
+        delete=False,
+        encoding=ENCODING,
+    ) as handle:
         path = Path(handle.name)
         handle.write(dump_yaml(task))
     try:
         subprocess.run([*shlex.split(editor), str(path)], check=True)
-        edited = yaml.safe_load(path.read_text())
+        edited = yaml.safe_load(read_text(path))
     finally:
         path.unlink(missing_ok=True)
 
@@ -486,7 +493,7 @@ def today() -> None:
         console.print("Run `f review` to make a decision on overdue/recheck items.")
 
     stale_messages = list(stale)
-    now_updated = parse_now_updated(store.now_path.read_text())
+    now_updated = parse_now_updated(read_text(store.now_path))
     if now_updated and now_updated < today - timedelta(days=7):
         stale_messages.append(f"now.md last updated {now_updated.isoformat()}")
     if stale_messages:
@@ -600,10 +607,10 @@ def assemble_context_pack(
 
     profile = profiles[profile_name]
     charter = select_charter_sections(
-        store.charter_path.read_text(),
+        read_text(store.charter_path),
         profile.get("charter_sections", "all"),
     )
-    now = store.now_path.read_text().strip()
+    now = read_text(store.now_path).strip()
     task_tags = profile.get("task_tags", "all")
     tasks = [
         task
@@ -722,7 +729,7 @@ def triage() -> None:
     """Interactively triage inbox lines into tasks, ideas, decisions, notes, or drops."""
     store = get_store()
     store.ensure_layout()
-    lines = [line for line in store.inbox_path.read_text().splitlines() if line.strip()]
+    lines = [line for line in read_text(store.inbox_path).splitlines() if line.strip()]
     if not lines:
         console.print("Inbox is empty.")
         return

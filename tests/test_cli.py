@@ -7,6 +7,7 @@ import yaml
 from typer.testing import CliRunner
 
 from openfin.cli import app
+from openfin.storage import dump_yaml, read_text, write_text_atomic
 
 
 runner = CliRunner()
@@ -21,6 +22,10 @@ def openfin_home(tmp_path: Path) -> Path:
     return tmp_path / "openfin"
 
 
+def load_tasks(tmp_path: Path):
+    return yaml.safe_load(read_text(openfin_home(tmp_path) / "tasks.yaml"))
+
+
 def test_task_lifecycle_and_today_view(tmp_path: Path) -> None:
     due_today = date.today().isoformat()
 
@@ -32,7 +37,7 @@ def test_task_lifecycle_and_today_view(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "t-0001" in result.output
 
-    tasks = yaml.safe_load((openfin_home(tmp_path) / "tasks.yaml").read_text())
+    tasks = load_tasks(tmp_path)
     assert tasks[0]["title"] == "Ship Phase 1"
     assert tasks[0]["priority"] == "P1"
     assert tasks[0]["due"] == due_today
@@ -47,9 +52,9 @@ def test_task_lifecycle_and_today_view(tmp_path: Path) -> None:
     done = run_cli(tmp_path, ["done", "t-0001"])
 
     assert done.exit_code == 0, done.output
-    tasks = yaml.safe_load((openfin_home(tmp_path) / "tasks.yaml").read_text())
+    tasks = load_tasks(tmp_path)
     assert tasks[0]["status"] == "done"
-    log_text = next((openfin_home(tmp_path) / "log").glob("*.md")).read_text()
+    log_text = read_text(next((openfin_home(tmp_path) / "log").glob("*.md")))
     assert "#done t-0001 Ship Phase 1" in log_text
 
 
@@ -57,13 +62,13 @@ def test_capture_idea_and_search(tmp_path: Path) -> None:
     captured = run_cli(tmp_path, ["in", "ping design folks about onboarding"])
 
     assert captured.exit_code == 0, captured.output
-    inbox = (openfin_home(tmp_path) / "inbox.md").read_text()
+    inbox = read_text(openfin_home(tmp_path) / "inbox.md")
     assert "ping design folks about onboarding" in inbox
 
     idea = run_cli(tmp_path, ["idea", "meter by tokens processed", "-t", "pricing"])
 
     assert idea.exit_code == 0, idea.output
-    log_text = next((openfin_home(tmp_path) / "log").glob("*.md")).read_text()
+    log_text = read_text(next((openfin_home(tmp_path) / "log").glob("*.md")))
     assert "#idea #pricing meter by tokens processed" in log_text
 
     found = run_cli(tmp_path, ["search", "tokens"])
@@ -78,7 +83,8 @@ def test_context_profile_filters_sections_tasks_and_topic_hits(tmp_path: Path) -
     assert init.exit_code == 0, init.output
 
     home = openfin_home(tmp_path)
-    (home / "charter.md").write_text(
+    write_text_atomic(
+        home / "charter.md",
         "# OpenFin Charter\n"
         "## Mission\n"
         "Keep founder context current.\n"
@@ -89,7 +95,8 @@ def test_context_profile_filters_sections_tasks_and_topic_hits(tmp_path: Path) -
         "## Non-goals\n"
         "- No API layer in Phase 1.\n"
     )
-    (home / "profiles.yaml").write_text(
+    write_text_atomic(
+        home / "profiles.yaml",
         "default:\n"
         "  charter_sections: all\n"
         "  task_tags: all\n"
@@ -144,9 +151,9 @@ def test_future_recheck_quiets_overdue_review_and_today(tmp_path: Path) -> None:
     assert created.exit_code == 0, created.output
 
     task_path = openfin_home(tmp_path) / "tasks.yaml"
-    tasks = yaml.safe_load(task_path.read_text())
+    tasks = yaml.safe_load(read_text(task_path))
     tasks[0]["recheck"] = tomorrow
-    task_path.write_text(yaml.safe_dump(tasks, sort_keys=False))
+    write_text_atomic(task_path, dump_yaml(tasks))
 
     overdue = run_cli(tmp_path, ["overdue"])
     today = run_cli(tmp_path, ["today"])
@@ -160,6 +167,35 @@ def test_future_recheck_quiets_overdue_review_and_today(tmp_path: Path) -> None:
     assert "No overdue or recheck items." in review.output
 
 
+def test_review_commit_writes_recheck_and_quiets_next_run(tmp_path: Path) -> None:
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    expected_recheck = (date.today() + timedelta(days=3)).isoformat()
+
+    created = run_cli(tmp_path, ["add", "Commit round trip", "-d", yesterday])
+    assert created.exit_code == 0, created.output
+
+    reviewed = runner.invoke(
+        app,
+        ["review"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="commit\n3\n",
+    )
+    assert reviewed.exit_code == 0, reviewed.output
+
+    tasks = load_tasks(tmp_path)
+    assert tasks[0]["recheck"] == expected_recheck
+    log_text = "\n".join(read_text(path) for path in (openfin_home(tmp_path) / "log").glob("*.md"))
+    assert f"#commit t-0001 recheck {expected_recheck}" in log_text
+
+    followup_review = run_cli(tmp_path, ["review"])
+    today = run_cli(tmp_path, ["today"])
+    overdue = run_cli(tmp_path, ["overdue"])
+
+    assert "No overdue or recheck items." in followup_review.output
+    assert "Run `f review`" not in today.output
+    assert "Commit round trip" not in overdue.output
+
+
 def test_archived_task_ids_are_not_reused_and_done_log_is_not_duplicated(
     tmp_path: Path,
 ) -> None:
@@ -171,9 +207,9 @@ def test_archived_task_ids_are_not_reused_and_done_log_is_not_duplicated(
     assert done.exit_code == 0, done.output
 
     task_path = openfin_home(tmp_path) / "tasks.yaml"
-    tasks = yaml.safe_load(task_path.read_text())
+    tasks = yaml.safe_load(read_text(task_path))
     tasks[0]["updated"] = old_day
-    task_path.write_text(yaml.safe_dump(tasks, sort_keys=False))
+    write_text_atomic(task_path, dump_yaml(tasks))
 
     compacted = run_cli(tmp_path, ["compact"])
     added = run_cli(tmp_path, ["add", "Fresh task"])
@@ -182,7 +218,7 @@ def test_archived_task_ids_are_not_reused_and_done_log_is_not_duplicated(
     assert added.exit_code == 0, added.output
     assert "t-0002" in added.output
 
-    log_text = "\n".join(path.read_text() for path in (openfin_home(tmp_path) / "log").glob("*.md"))
+    log_text = "\n".join(read_text(path) for path in (openfin_home(tmp_path) / "log").glob("*.md"))
     assert log_text.count("#done t-0001 Old finished task") == 1
 
 
@@ -193,7 +229,8 @@ def test_evening_digest_only_shows_closed_today(tmp_path: Path) -> None:
     today = date.today()
     yesterday = today - timedelta(days=1)
     log_path = openfin_home(tmp_path) / "log" / f"{today:%Y-%m}.md"
-    log_path.write_text(
+    write_text_atomic(
+        log_path,
         f"## {yesterday.isoformat()}\n\n"
         "- 18:00 #done t-0001 Done yesterday\n\n"
         f"## {today.isoformat()}\n\n"
@@ -218,9 +255,9 @@ def test_compact_redundancy_requires_old_or_overdue_shared_tag(tmp_path: Path) -
     assert "POSSIBLE REDUNDANCY" not in fresh.output
 
     task_path = openfin_home(tmp_path) / "tasks.yaml"
-    tasks = yaml.safe_load(task_path.read_text())
+    tasks = yaml.safe_load(read_text(task_path))
     tasks[0]["created"] = (date.today() - timedelta(days=8)).isoformat()
-    task_path.write_text(yaml.safe_dump(tasks, sort_keys=False))
+    write_text_atomic(task_path, dump_yaml(tasks))
 
     old = run_cli(tmp_path, ["compact"])
     assert old.exit_code == 0, old.output
@@ -233,9 +270,9 @@ def test_bad_hand_edited_dates_are_flagged_not_crashing_views(tmp_path: Path) ->
     assert created.exit_code == 0, created.output
 
     task_path = openfin_home(tmp_path) / "tasks.yaml"
-    tasks = yaml.safe_load(task_path.read_text())
+    tasks = yaml.safe_load(read_text(task_path))
     tasks[0]["due"] = "not-a-date"
-    task_path.write_text(yaml.safe_dump(tasks, sort_keys=False))
+    write_text_atomic(task_path, dump_yaml(tasks))
 
     today = run_cli(tmp_path, ["today"])
     overdue = run_cli(tmp_path, ["overdue"])
@@ -247,13 +284,23 @@ def test_bad_hand_edited_dates_are_flagged_not_crashing_views(tmp_path: Path) ->
 
 
 def test_task_yaml_preserves_unicode_for_human_readability(tmp_path: Path) -> None:
-    title = "Resume \u2014 investor update"
+    title = "Résumé \u2014 investor update 😀 漢字"
 
     created = run_cli(tmp_path, ["add", title])
+    captured = run_cli(tmp_path, ["in", title])
+    idea = run_cli(tmp_path, ["idea", title])
 
     assert created.exit_code == 0, created.output
-    raw = (openfin_home(tmp_path) / "tasks.yaml").read_text()
+    assert captured.exit_code == 0, captured.output
+    assert idea.exit_code == 0, idea.output
+    raw = read_text(openfin_home(tmp_path) / "tasks.yaml")
+    raw_bytes = (openfin_home(tmp_path) / "tasks.yaml").read_bytes()
+    inbox_bytes = (openfin_home(tmp_path) / "inbox.md").read_bytes()
+    log_bytes = b"".join(path.read_bytes() for path in (openfin_home(tmp_path) / "log").glob("*.md"))
     assert "\\u2014" not in raw
+    assert title.encode("utf-8") in raw_bytes
+    assert title.encode("utf-8") in inbox_bytes
+    assert title.encode("utf-8") in log_bytes
 
 
 def test_log_tag_filter_matches_exact_tags(tmp_path: Path) -> None:
@@ -269,3 +316,27 @@ def test_log_tag_filter_matches_exact_tags(tmp_path: Path) -> None:
     assert missed.exit_code == 0, missed.output
     assert "launch draft" in found.output
     assert "No matches." in missed.output
+
+
+def test_triage_task_idea_drop_branches_and_rewrites_inbox(tmp_path: Path) -> None:
+    first = run_cli(tmp_path, ["in", "turn first capture into task"])
+    second = run_cli(tmp_path, ["in", "turn second capture into idea"])
+    third = run_cli(tmp_path, ["in", "drop this capture"])
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    assert third.exit_code == 0, third.output
+
+    triaged = runner.invoke(
+        app,
+        ["triage"],
+        env={"OPENFIN_HOME": str(openfin_home(tmp_path))},
+        input="task\nidea\ndrop\n",
+    )
+
+    assert triaged.exit_code == 0, triaged.output
+    tasks = load_tasks(tmp_path)
+    assert tasks[0]["title"] == "turn first capture into task"
+
+    log_text = "\n".join(read_text(path) for path in (openfin_home(tmp_path) / "log").glob("*.md"))
+    assert "#idea turn second capture into idea" in log_text
+    assert read_text(openfin_home(tmp_path) / "inbox.md") == ""

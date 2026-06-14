@@ -11,6 +11,7 @@ from typing import Any, Iterable
 import yaml
 
 
+ENCODING = "utf-8"
 TASK_STATUSES = {"open", "doing", "blocked", "done", "dropped"}
 ACTIVE_STATUSES = {"open", "doing", "blocked"}
 PRIORITIES = {"P0", "P1", "P2", "P3"}
@@ -134,7 +135,7 @@ class OpenFinStore:
 
     def load_tasks(self) -> list[dict[str, Any]]:
         self.ensure_layout()
-        loaded = yaml.safe_load(self.tasks_path.read_text()) or []
+        loaded = yaml.safe_load(read_text(self.tasks_path)) or []
         if not isinstance(loaded, list):
             raise ValueError(f"{self.tasks_path} must contain a YAML list")
         return loaded
@@ -145,7 +146,7 @@ class OpenFinStore:
 
     def load_profiles(self) -> dict[str, dict[str, Any]]:
         self.ensure_layout()
-        loaded = yaml.safe_load(self.profiles_path.read_text()) or {}
+        loaded = yaml.safe_load(read_text(self.profiles_path)) or {}
         if not isinstance(loaded, dict):
             raise ValueError(f"{self.profiles_path} must contain a YAML mapping")
         return loaded
@@ -156,14 +157,13 @@ class OpenFinStore:
         for task in tasks:
             highest = max(highest, max_task_id(str(task.get("id", ""))))
         for path in sorted(self.log_dir.glob("*.md")):
-            highest = max(highest, max_task_id(path.read_text()))
+            highest = max(highest, max_task_id(read_text(path)))
         return f"t-{highest + 1:04d}"
 
     def append_inbox(self, text: str, when: datetime | None = None) -> None:
         self.ensure_layout()
         when = when or datetime.now()
-        with self.inbox_path.open("a") as handle:
-            handle.write(f"- {when:%Y-%m-%d %H:%M} {text}\n")
+        append_text(self.inbox_path, f"- {when:%Y-%m-%d %H:%M} {text}\n")
 
     def write_inbox_lines(self, lines: list[str]) -> None:
         self.ensure_layout()
@@ -178,7 +178,7 @@ class OpenFinStore:
         self.ensure_layout()
         when = when or datetime.now()
         path = self.current_log_path(when)
-        existing = path.read_text() if path.exists() else ""
+        existing = read_text(path) if path.exists() else ""
         header = f"## {when:%Y-%m-%d}"
         prefix = ""
         if existing and not existing.endswith("\n"):
@@ -187,9 +187,7 @@ class OpenFinStore:
             if existing:
                 prefix += "\n"
             prefix += f"{header}\n\n"
-        with path.open("a") as handle:
-            handle.write(prefix)
-            handle.write(f"- {when:%H:%M} {body}\n")
+        append_text(path, f"{prefix}- {when:%H:%M} {body}\n")
 
     def iter_text_files(self) -> Iterable[tuple[Path, str]]:
         self.ensure_layout()
@@ -217,7 +215,7 @@ class OpenFinStore:
 
         for path, source in self.iter_text_files():
             current_date: date | None = None
-            for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+            for line_number, raw_line in enumerate(read_text(path).splitlines(), start=1):
                 line = raw_line.rstrip()
                 header_date = parse_log_header_date(line)
                 if header_date:
@@ -261,7 +259,7 @@ class OpenFinStore:
 
         for path in sorted(self.log_dir.glob("*.md")):
             current_day: date | None = None
-            for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+            for line_number, line in enumerate(read_text(path).splitlines(), start=1):
                 if line.startswith("## "):
                     current_day = parse_log_header_date(line)
                     continue
@@ -296,7 +294,7 @@ class OpenFinStore:
 
     def has_log_marker(self, marker: str, task_id: str) -> bool:
         needle = re.compile(rf"(?<![\w-])#{re.escape(marker)}\s+{re.escape(task_id)}(?![\w-])")
-        return any(needle.search(path.read_text()) for path in self.log_dir.glob("*.md"))
+        return any(needle.search(read_text(path)) for path in self.log_dir.glob("*.md"))
 
 
 def parse_log_header_date(line: str) -> date | None:
@@ -333,11 +331,26 @@ def dump_yaml(value: Any) -> str:
     return yaml.safe_dump(value, sort_keys=False, allow_unicode=True)
 
 
+def read_text(path: Path) -> str:
+    return path.read_text(encoding=ENCODING)
+
+
+def append_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding=ENCODING) as handle:
+        handle.write(text)
+
+
 def write_text_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_name: str | None = None
     try:
-        with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            delete=False,
+            encoding=ENCODING,
+        ) as handle:
             temp_name = handle.name
             handle.write(text)
         os.replace(temp_name, path)
