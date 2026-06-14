@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import socketserver
+import subprocess
+import sys
+import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -230,6 +235,177 @@ class OpenFindDaemon:
 
     def _error(self, message: str) -> dict[str, Any]:
         return {"ok": False, "error": message}
+
+
+class DaemonClient:
+    def __init__(self, socket_path: Path, *, timeout: float = 2.0) -> None:
+        self.socket_path = socket_path
+        self.timeout = timeout
+
+    def request(self, request: dict[str, Any]) -> dict[str, Any]:
+        return send_daemon_request(self.socket_path, request, timeout=self.timeout)
+
+    def ping(self) -> dict[str, Any]:
+        return self.request({"type": "ping"})
+
+    def register_session(
+        self,
+        meta: AgentSessionMeta,
+        *,
+        pid: int | None = None,
+    ) -> None:
+        request: dict[str, Any] = {
+            "type": "register_session",
+            "session": meta.to_dict(),
+        }
+        if pid is not None:
+            request["pid"] = pid
+        self._expect_ok(self.request(request))
+
+    def status(self, session_id: str) -> dict[str, Any]:
+        response = self.request({"type": "status", "session_id": session_id})
+        self._expect_ok(response)
+        session = response.get("session")
+        if not isinstance(session, dict):
+            raise DaemonError("openfind returned status without a session object")
+        return session
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        response = self.request({"type": "list_sessions"})
+        self._expect_ok(response)
+        sessions = response.get("sessions")
+        if not isinstance(sessions, list):
+            raise DaemonError("openfind returned list without sessions")
+        return sessions
+
+    def update_status(self, session_id: str, status: str) -> None:
+        self._expect_ok(
+            self.request(
+                {
+                    "type": "update_status",
+                    "session_id": session_id,
+                    "status": status,
+                }
+            )
+        )
+
+    def record_event(self, session_id: str, event: AgentEvent) -> None:
+        self._expect_ok(
+            self.request(
+                {
+                    "type": "session_event",
+                    "session_id": session_id,
+                    "event": event.to_dict(),
+                }
+            )
+        )
+
+    def send_input(
+        self,
+        session_id: str,
+        text: str,
+        *,
+        source: str = "local",
+    ) -> int:
+        response = self.request(
+            {
+                "type": "send_input",
+                "session_id": session_id,
+                "text": text,
+                "source": source,
+            }
+        )
+        self._expect_ok(response)
+        return int(response.get("queued") or 0)
+
+    def interrupt(self, session_id: str, *, source: str = "local") -> None:
+        self._expect_ok(
+            self.request(
+                {
+                    "type": "interrupt",
+                    "session_id": session_id,
+                    "source": source,
+                }
+            )
+        )
+
+    def stop(self, session_id: str, *, source: str = "local") -> None:
+        self._expect_ok(
+            self.request(
+                {
+                    "type": "stop",
+                    "session_id": session_id,
+                    "source": source,
+                }
+            )
+        )
+
+    def poll_input(self, session_id: str) -> list[dict[str, str]]:
+        response = self.request({"type": "poll_input", "session_id": session_id})
+        self._expect_ok(response)
+        items = response.get("items")
+        if not isinstance(items, list):
+            raise DaemonError("openfind returned poll response without items")
+        return [item for item in items if isinstance(item, dict)]
+
+    def unregister_session(self, session_id: str, *, status: str = "exited") -> None:
+        self._expect_ok(
+            self.request(
+                {
+                    "type": "unregister_session",
+                    "session_id": session_id,
+                    "status": status,
+                }
+            )
+        )
+
+    def _expect_ok(self, response: dict[str, Any]) -> None:
+        if response.get("ok") is True:
+            return
+        raise DaemonError(str(response.get("error") or "openfind request failed"))
+
+
+DaemonStarter = Callable[[AgentSessionStore], object]
+
+
+def connect_daemon(
+    store: AgentSessionStore,
+    *,
+    autostart: bool = True,
+    starter: DaemonStarter | None = None,
+    timeout: float = 2.0,
+) -> DaemonClient | None:
+    client = wait_for_daemon_client(store.socket_path, timeout=0.1)
+    if client is not None:
+        return client
+    if not autostart:
+        return None
+    (starter or start_openfind_process)(store)
+    return wait_for_daemon_client(store.socket_path, timeout=timeout)
+
+
+def wait_for_daemon_client(socket_path: Path, *, timeout: float) -> DaemonClient | None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() <= deadline:
+        client = DaemonClient(socket_path, timeout=0.2)
+        try:
+            client.ping()
+            return client
+        except (OSError, DaemonError, json.JSONDecodeError, TimeoutError):
+            time.sleep(0.05)
+    return None
+
+
+def start_openfind_process(store: AgentSessionStore) -> subprocess.Popen[bytes]:
+    env = os.environ.copy()
+    env["OPENFIN_HOME"] = str(store.root)
+    return subprocess.Popen(
+        [sys.executable, "-m", "openfin.daemon"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 class _DaemonUnixServer(socketserver.ThreadingUnixStreamServer):

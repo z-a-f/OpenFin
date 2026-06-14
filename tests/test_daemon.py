@@ -7,7 +7,9 @@ from typer.testing import CliRunner
 
 from openfin.agent_store import AgentEvent, AgentSessionMeta, AgentSessionStore, Project
 from openfin.daemon import (
+    DaemonClient,
     OpenFindDaemon,
+    connect_daemon,
     create_daemon_server,
     daemon_app,
     prepare_socket_path,
@@ -117,6 +119,65 @@ def test_daemon_unix_socket_request_response(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+    assert response == {"ok": True, "version": 1}
+
+
+def test_daemon_client_wraps_session_protocol(tmp_path: Path) -> None:
+    store = AgentSessionStore(tmp_path / "openfin")
+    meta = store.create_session(
+        AgentSessionMeta.new(
+            session_id="agent-001",
+            adapter="claude",
+            project=Project(name="OpenFin", root=tmp_path),
+        )
+    )
+    server = create_daemon_server(OpenFindDaemon(store))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = DaemonClient(store.socket_path)
+
+    try:
+        client.ping()
+        client.register_session(meta, pid=123)
+        client.update_status(meta.id, "busy")
+        client.send_input(meta.id, "from telegram", source="telegram")
+        queued = client.poll_input(meta.id)
+        status = client.status(meta.id)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert queued == [
+        {
+            "type": "message",
+            "text": "from telegram",
+            "source": "telegram",
+        }
+    ]
+    assert status["status"] == "busy"
+    assert status["pid"] == 123
+
+
+def test_connect_daemon_can_autostart_with_injected_starter(tmp_path: Path) -> None:
+    store = AgentSessionStore(tmp_path / "openfin")
+    servers: list[tuple[object, threading.Thread]] = []
+
+    def fake_starter(agent_store: AgentSessionStore) -> None:
+        server = create_daemon_server(OpenFindDaemon(agent_store))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        servers.append((server, thread))
+
+    try:
+        client = connect_daemon(store, starter=fake_starter)
+        response = client.ping() if client else {}
+    finally:
+        for server, thread in servers:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     assert response == {"ok": True, "version": 1}
 

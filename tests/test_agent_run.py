@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -54,6 +55,32 @@ class FakeAdapter:
 
     def status(self) -> str:
         return "idle"
+
+
+class FakeDaemonClient:
+    def __init__(self, poll_batches: list[list[dict[str, str]]] | None = None) -> None:
+        self.poll_batches = poll_batches or []
+        self.registered: list[str] = []
+        self.statuses: list[tuple[str, str]] = []
+        self.events: list[tuple[str, AgentEvent]] = []
+        self.unregistered: list[tuple[str, str]] = []
+
+    def register_session(self, meta, *, pid: int | None = None) -> None:
+        del pid
+        self.registered.append(meta.id)
+
+    def update_status(self, session_id: str, status: str) -> None:
+        self.statuses.append((session_id, status))
+
+    def record_event(self, session_id: str, event: AgentEvent) -> None:
+        self.events.append((session_id, event))
+
+    def poll_input(self, session_id: str) -> list[dict[str, str]]:
+        del session_id
+        return self.poll_batches.pop(0) if self.poll_batches else []
+
+    def unregister_session(self, session_id: str, *, status: str) -> None:
+        self.unregistered.append((session_id, status))
 
 
 def test_parse_run_args_accepts_safe_claude_flags() -> None:
@@ -122,6 +149,96 @@ def test_run_agent_session_logs_transcript_and_repl_turns(tmp_path: Path) -> Non
     assert f"#agent {meta.id} claude ended" in log_text(tmp_path)
     assert any("status: idle" in output for output in outputs)
     assert any("answer: first turn" in output for output in outputs)
+
+
+def test_run_agent_session_registers_with_daemon_and_polls_remote_input(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter()
+    outputs: list[str] = []
+    daemon = FakeDaemonClient(
+        [
+            [
+                {
+                    "type": "message",
+                    "text": "remote turn",
+                    "source": "telegram",
+                }
+            ],
+            [],
+        ]
+    )
+    inputs = iter(["/exit"])
+
+    meta = run_agent_session(
+        adapter=adapter,
+        project=Project(name="OpenFin", root=tmp_path),
+        store=AgentSessionStore(openfin_home(tmp_path)),
+        initial_prompt=None,
+        model=None,
+        resume_id=None,
+        system_context=None,
+        input_func=lambda prompt: next(inputs),
+        output_func=outputs.append,
+        daemon_client=daemon,
+    )
+
+    assert daemon.registered == [meta.id]
+    assert daemon.statuses == [
+        (meta.id, "busy"),
+        (meta.id, "idle"),
+    ]
+    assert [event.kind for _, event in daemon.events] == ["assistant_text", "turn_done"]
+    assert daemon.unregistered == [(meta.id, "exited")]
+    assert adapter.prompts == ["remote turn"]
+    assert any("telegram> remote turn" in output for output in outputs)
+
+
+def test_run_agent_session_polls_daemon_while_waiting_for_local_input(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter()
+    outputs: list[str] = []
+    daemon = FakeDaemonClient(
+        [
+            [],
+            [
+                {
+                    "type": "message",
+                    "text": "arrived while away",
+                    "source": "telegram",
+                }
+            ],
+            [
+                {
+                    "type": "stop",
+                    "text": "",
+                    "source": "telegram",
+                }
+            ],
+        ]
+    )
+
+    def slow_input(prompt: str) -> str:
+        del prompt
+        time.sleep(0.2)
+        return "/exit"
+
+    run_agent_session(
+        adapter=adapter,
+        project=Project(name="OpenFin", root=tmp_path),
+        store=AgentSessionStore(openfin_home(tmp_path)),
+        initial_prompt=None,
+        model=None,
+        resume_id=None,
+        system_context=None,
+        input_func=slow_input,
+        output_func=outputs.append,
+        daemon_client=daemon,
+    )
+
+    assert adapter.prompts == ["arrived while away"]
+    assert any("telegram> stop" in output for output in outputs)
 
 
 def test_console_entrypoint_run_option_forwards_extra_args(

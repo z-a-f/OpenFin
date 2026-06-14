@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import os
+import queue
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import typer
 
@@ -16,6 +21,7 @@ from openfin.agent_store import (
 )
 from openfin.claude_adapter import ClaudeAdapter
 from openfin.context import assemble_context_pack
+from openfin.daemon import connect_daemon
 from openfin.storage import OpenFinStore
 from openfin.ui import console
 
@@ -31,6 +37,53 @@ class RunArgs:
 
 
 SAFE_RUN_OPTIONS = {"--model", "--resume", "--profile", "--for"}
+NO_INPUT = object()
+
+
+class AgentDaemonClient(Protocol):
+    def register_session(
+        self,
+        meta: AgentSessionMeta,
+        *,
+        pid: int | None = None,
+    ) -> None: ...
+
+    def update_status(self, session_id: str, status: str) -> None: ...
+
+    def record_event(self, session_id: str, event: AgentEvent) -> None: ...
+
+    def poll_input(self, session_id: str) -> list[dict[str, str]]: ...
+
+    def unregister_session(self, session_id: str, *, status: str) -> None: ...
+
+
+class BackgroundInput:
+    def __init__(self, input_func: Callable[[str], str]) -> None:
+        self._input_func = input_func
+        self._queue: queue.Queue[str | BaseException] = queue.Queue()
+        self._thread: threading.Thread | None = None
+
+    def start(self, prompt: str) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(
+            target=self._read,
+            args=(prompt,),
+            daemon=True,
+        )
+        self._thread.start()
+
+    def poll(self) -> str | BaseException | object:
+        try:
+            return self._queue.get_nowait()
+        except queue.Empty:
+            return NO_INPUT
+
+    def _read(self, prompt: str) -> None:
+        try:
+            self._queue.put(self._input_func(prompt))
+        except BaseException as exc:
+            self._queue.put(exc)
 
 
 def parse_run_args(args: list[str]) -> RunArgs:
@@ -89,16 +142,21 @@ def run_agent_from_cli(args: list[str]) -> None:
         topic=parsed.topic,
     )
     adapter = create_adapter(parsed.adapter)
+    agent_store = AgentSessionStore(openfin_store.root)
+    daemon_client = connect_daemon(agent_store)
+    if daemon_client is None:
+        console.print("openfind unavailable; continuing local-only", markup=False)
     run_agent_session(
         adapter=adapter,
         project=project,
-        store=AgentSessionStore(openfin_store.root),
+        store=agent_store,
         initial_prompt=parsed.initial_prompt,
         model=parsed.model,
         resume_id=parsed.resume_id,
         system_context=system_context,
         input_func=lambda prompt: typer.prompt(prompt, prompt_suffix=""),
         output_func=lambda text: console.print(text, markup=False),
+        daemon_client=daemon_client,
     )
 
 
@@ -119,6 +177,7 @@ def run_agent_session(
     system_context: str | None,
     input_func: Callable[[str], str],
     output_func: Callable[[str], None],
+    daemon_client: AgentDaemonClient | None = None,
 ) -> AgentSessionMeta:
     meta = store.create_session(
         AgentSessionMeta.new(
@@ -127,10 +186,26 @@ def run_agent_session(
         )
     )
     current_resume_id = resume_id
+    daemon_active = daemon_client is not None
+    background_input = BackgroundInput(input_func)
+
+    def daemon_call(action: Callable[[AgentDaemonClient], object]) -> object | None:
+        nonlocal daemon_active
+        if not daemon_active or daemon_client is None:
+            return None
+        try:
+            return action(daemon_client)
+        except Exception as exc:  # pragma: no cover - defensive local-only fallback
+            daemon_active = False
+            output_func(f"openfind unavailable; continuing local-only ({exc})")
+            return None
+
+    daemon_call(lambda client: client.register_session(meta, pid=os.getpid()))
 
     def run_turn(prompt: str, resume: str | None) -> str | None:
         nonlocal meta
         store.update_meta(meta.id, status="busy")
+        daemon_call(lambda client: client.update_status(meta.id, "busy"))
         last_session_id = resume
         had_error = False
         for event in adapter.run_turn(
@@ -141,6 +216,7 @@ def run_agent_session(
             system_context=system_context,
         ):
             store.append_event(meta.id, event)
+            daemon_call(lambda client, event=event: client.record_event(meta.id, event))
             if event.session_id:
                 last_session_id = event.session_id
                 meta = store.update_meta(meta.id, native_session_id=last_session_id)
@@ -150,17 +226,60 @@ def run_agent_session(
             if rendered:
                 output_func(rendered)
         meta = store.update_meta(meta.id, status="error" if had_error else "idle")
+        daemon_call(lambda client: client.update_status(meta.id, meta.status))
         return last_session_id
+
+    def process_daemon_input() -> bool:
+        nonlocal current_resume_id
+        items = daemon_call(lambda client: client.poll_input(meta.id))
+        if not isinstance(items, list):
+            return False
+        should_stop = False
+        for item in items:
+            item_type = item.get("type")
+            source = item.get("source") or "remote"
+            if item_type == "message":
+                text = (item.get("text") or "").strip()
+                if not text:
+                    continue
+                output_func(f"{source}> {text}")
+                current_resume_id = run_turn(text, current_resume_id)
+            elif item_type == "interrupt":
+                adapter.interrupt()
+                output_func(f"{source}> interrupt")
+            elif item_type == "stop":
+                output_func(f"{source}> stop")
+                should_stop = True
+        return should_stop
+
+    def read_user_input() -> tuple[str | None, bool]:
+        if not daemon_active:
+            return input_func("openfin> "), False
+        background_input.start("openfin> ")
+        while True:
+            result = background_input.poll()
+            if result is not NO_INPUT:
+                if isinstance(result, BaseException):
+                    raise result
+                return result, False
+            if process_daemon_input():
+                return None, True
+            time.sleep(0.05)
 
     if initial_prompt:
         current_resume_id = run_turn(initial_prompt, current_resume_id)
 
     while True:
+        if process_daemon_input():
+            break
         try:
-            user_input = input_func("openfin> ").strip()
+            user_input, should_stop = read_user_input()
         except (EOFError, KeyboardInterrupt):
             output_func("exiting")
             break
+        if should_stop:
+            break
+        user_input = (user_input or "").strip()
         if not user_input:
             continue
         if user_input in {"/exit", "/quit"}:
@@ -175,6 +294,7 @@ def run_agent_session(
         current_resume_id = run_turn(user_input, current_resume_id)
 
     meta = store.update_meta(meta.id, status="exited")
+    daemon_call(lambda client: client.unregister_session(meta.id, status=meta.status))
     write_agent_memory_log(store, meta)
     return meta
 
