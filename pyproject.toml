@@ -15,6 +15,7 @@ dependencies = [
 [project.scripts]
 f = "openfin.cli:main_entry"
 openfin = "openfin.cli:main_entry"
+openfind = "openfin.daemon:main"
 
 [dependency-groups]
 dev = [
